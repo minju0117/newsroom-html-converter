@@ -216,10 +216,10 @@ function slideNumber(path) {
 function readEml(text) {
   const htmlPart = extractMimePart(text, "text/html");
   const plainPart = extractMimePart(text, "text/plain");
-  const raw = htmlPart
-    ? htmlToText(decodeMimeBody(htmlPart.body, htmlPart.encoding))
-    : decodeMimeBody(plainPart?.body || text, plainPart?.encoding || "");
-  const blocks = splitLines(raw)
+  const raw = plainPart
+    ? decodeMimeBody(plainPart.body, plainPart.encoding)
+    : htmlToText(decodeMimeBody(htmlPart?.body || text, htmlPart?.encoding || ""));
+  const blocks = splitEmailParagraphs(raw)
     .map(cleanText)
     .filter(Boolean)
     .map((line) => ({ type: "paragraph", text: line }));
@@ -311,6 +311,30 @@ function splitLines(text) {
     .map((line) => line.trim());
 }
 
+function splitEmailParagraphs(text) {
+  const normalized = (text || "")
+    .replace(/\r/g, "")
+    .replace(/\[cid:[^\]]+\]/gi, "\n")
+    .replace(/\n{3,}/g, "\n\n");
+  const paragraphs = normalized.split(/\n{2,}/).map((block) => block.trim()).filter(Boolean);
+  const result = [];
+
+  paragraphs.forEach((block) => {
+    const lines = block.split(/\n/).map((line) => line.trim()).filter(Boolean);
+    if (lines.length > 1 && lines.every((line) => /^-/.test(line))) {
+      result.push(...lines);
+      return;
+    }
+    if (lines.length > 1 && lines.some((line) => /^-/.test(line))) {
+      lines.forEach((line) => result.push(line));
+      return;
+    }
+    result.push(lines.join(" "));
+  });
+
+  return result;
+}
+
 function buildAdminHtml(extracted) {
   const mode = resolveMode(extracted);
   const imageUrls = imageUrlsInput.value.split(/\n+/).map((url) => url.trim()).filter(Boolean);
@@ -325,12 +349,14 @@ function buildAdminHtml(extracted) {
   html.push(blank());
 
   if (prepared.leads.length) {
-    html.push(`<p class="bold">\n${prepared.leads.map(escapeHtml).join("<br>\n")}\n</p>`);
+    prepared.leads.forEach((lead) => {
+      html.push(`<p class="bold">\n${escapeHtml(lead)}\n</p>`);
+    });
     html.push(blank());
   }
 
   if (imageUrls[imageIndex]) {
-    html.push(imageBlock(imageUrls[imageIndex], mode === "ppt" ? "50%" : "70%"));
+    html.push(imageBlock(imageUrls[imageIndex], imageWidthForMode(mode)));
     imageIndex += 1;
     if (prepared.captions[0]) html.push(captionBlock(prepared.captions.shift()));
     html.push(blank());
@@ -394,6 +420,7 @@ function prepareBlocks(lines, mode) {
       title = cleanText(line.replace(/^제목\s*[:：]\s*/, ""));
       return;
     }
+    if (/^본문\s*[:：]?\s*$/i.test(line)) return;
     if (!title && !line.startsWith("-") && !isCaption(line) && !isDisposableLabel(line)) {
       title = line;
       return;
@@ -440,9 +467,14 @@ function removeEmailNoise(lines) {
   const titleIndex = cleaned.findIndex((line) => /^제목\s*[:：]/.test(line));
   const start = titleIndex >= 0 ? titleIndex : 0;
   const result = [];
+  let seenTitle = 0;
 
   for (let index = start; index < cleaned.length; index += 1) {
     const line = cleaned[index];
+    if (/^제목\s*[:：]/.test(line)) {
+      seenTitle += 1;
+      if (seenTitle > 1) break;
+    }
     if (/^(감사합니다|.+올림|이\s*예\s*지|Yeji Lee|매니저|MANAGER|㈜삼양사|Samyang Corp\.|본 메일은|This e-mail is intended)/i.test(line)) break;
     if (/뉴스룸.*업로드 요청/.test(line)) continue;
     if (/^(안녕하세요|삼양사|Specialty|마케팅팀)/.test(line)) continue;
@@ -500,6 +532,12 @@ function indentBlock(line) {
 
 function imageBlock(src, width) {
   return `<p style="text-align: center; "><img src="${escapeAttribute(src)}" style="width: ${width};"><br></p>`;
+}
+
+function imageWidthForMode(mode) {
+  if (mode === "ppt") return "50%";
+  if (mode === "story") return "60%";
+  return "70%";
 }
 
 function captionBlock(text) {
