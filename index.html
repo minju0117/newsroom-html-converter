@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Newsroom HTML Converter</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="workspace">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Newsroom Upload Tool</p>
+            <h1>뉴스룸 HTML 변환기</h1>
+          </div>
+          <div class="status-pill">브라우저 내부 처리</div>
+        </header>
+
+        <section class="tool-grid">
+          <div class="panel input-panel">
+            <label class="dropzone" id="dropzone">
+              <input id="fileInput" type="file" accept=".pptx,.docx,.eml,.html,.htm,.txt">
+              <span class="drop-icon" aria-hidden="true">+</span>
+              <strong>파일 업로드</strong>
+              <span>PPTX, DOCX, EML, HTML, TXT 지원</span>
+            </label>
+
+            <div class="file-meta" id="fileMeta">
+              <span>아직 선택된 파일이 없습니다.</span>
+            </div>
+
+            <div class="controls">
+              <label>
+                제목
+                <input id="titleInput" type="text" placeholder="원고에서 자동 추출">
+              </label>
+
+              <label>
+                변환 유형
+                <select id="templateMode">
+                  <option value="auto">자동 판별</option>
+                  <option value="press">보도자료형 DOCX</option>
+                  <option value="story">스토리/메일형</option>
+                  <option value="ppt">PPT 뉴스룸형</option>
+                </select>
+              </label>
+
+              <label>
+                이미지 URL
+                <textarea id="imageUrlsInput" rows="4" placeholder="/upload/editor/example.jpg&#10;한 줄에 하나씩 입력"></textarea>
+              </label>
+
+              <label>
+                영상 URL
+                <input id="videoUrlInput" type="text" placeholder="YouTube URL 또는 embed URL">
+              </label>
+
+              <label>
+                출처/하단 문구
+                <input id="sourceInput" type="text" placeholder="원고에서 자동 추출 또는 직접 입력">
+              </label>
+            </div>
+
+            <div class="actions">
+              <button id="convertButton" type="button" disabled>변환하기</button>
+              <button id="copyButton" type="button" disabled>HTML 복사</button>
+              <button id="downloadButton" type="button" disabled>HTML 다운로드</button>
+            </div>
+
+            <div class="note">
+              파일은 서버로 업로드되지 않고 현재 브라우저 안에서만 읽힙니다. 홈페이지에 업로드한 이미지 주소만 입력하면 최종 HTML에 반영됩니다.
+            </div>
+          </div>
+
+          <div class="panel preview-panel">
+            <div class="panel-header">
+              <h2>미리보기</h2>
+              <button id="downloadPreviewButton" type="button" disabled>Preview 저장</button>
+            </div>
+            <article class="newsroom-preview" id="preview">
+              <p class="empty-state">파일을 업로드하면 변환 결과가 여기에 표시됩니다.</p>
+            </article>
+          </div>
+        </section>
+
+        <section class="panel code-panel">
+          <div class="panel-header">
+            <h2>업로드용 HTML</h2>
+            <span id="convertStatus">대기 중</span>
+          </div>
+          <textarea id="htmlOutput" spellcheck="false" placeholder="변환된 HTML이 여기에 생성됩니다."></textarea>
+        </section>
+      </section>
+    </main>
+
+    <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+    <script src="script.js"></script>
+  </body>
+</html>
