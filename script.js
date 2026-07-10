@@ -473,16 +473,20 @@ function parseEmlHtmlSection(html) {
       ? paragraphs.slice(titleIndex + 1)
       : paragraphs;
   const title = titleIndex >= 0 ? cleanText(stripTitlePrefix(paragraphs[titleIndex].text)) : "";
+  const summaries = [];
   const body = [];
+  let summaryOpen = true;
 
   for (const paragraph of sourceParagraphs) {
     if (isHtmlFooterStart(paragraph)) break;
     if (isTitleLabel(paragraph.text) || isTitlePrefix(paragraph.text) || isBodyLabel(paragraph.text) || isBodyPrefix(paragraph.text)) continue;
     if (isHtmlImageNote(paragraph.text) || hasInlineImage(paragraph.html)) {
+      summaryOpen = false;
       body.push({ type: "image", text: KR_IMAGE });
       continue;
     }
     if (isFootnoteBlock([paragraph.text])) {
+      summaryOpen = false;
       body.push({ type: "footnote", text: paragraph.text });
       continue;
     }
@@ -493,9 +497,14 @@ function parseEmlHtmlSection(html) {
     if (title && paragraph.text === title) continue;
 
     if (isHtmlBullet(paragraph.text)) {
+      if (summaryOpen) {
+        summaries.push(paragraph.text);
+        continue;
+      }
       body.push({ type: "richIndent", html: htmlText, text: paragraph.text });
       continue;
     }
+    summaryOpen = false;
     if (isHtmlHeading(paragraph.html, paragraph.text)) {
       body.push({ type: hasColor(paragraph.html, "#26247B") ? "richHeading" : "richBold", html: htmlText, text: paragraph.text });
       continue;
@@ -505,7 +514,7 @@ function parseEmlHtmlSection(html) {
     });
   }
 
-  return { title, summaries: [], body: mergeCaptionAfterImage(body) };
+  return { title, summaries, body: mergeCaptionAfterImage(body) };
 }
 
 function htmlInlineText(html) {
