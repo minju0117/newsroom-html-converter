@@ -260,6 +260,14 @@ function slideNumber(path) {
 function readEml(text) {
   const htmlPart = extractMimePart(text, "text/html");
   const plainParts = extractMimeParts(text, "text/plain");
+  const htmlText = htmlPart ? decodeMimeBody(htmlPart.body, htmlPart.encoding) : "";
+  const htmlSections = htmlText ? parseEmlHtmlSections(htmlText) : [];
+  if (htmlSections.length) {
+    const blocks = htmlSections.flatMap((section) => flattenEmlSection(section));
+    const attachments = [...text.matchAll(/filename="?([^"\r\n;]+)"?/gi)].map((match) => match[1]);
+    return { format: "eml", blocks, sections: htmlSections, mediaCount: attachments.length, attachments };
+  }
+
   const plainTexts = plainParts
     .map((part) => decodeMimeBody(part.body, part.encoding))
     .map(normalizeEmailText)
@@ -410,6 +418,151 @@ function normalizeEmailText(text) {
     .trim();
 }
 
+function parseEmlHtmlSections(html) {
+  const cells = extractHtmlTableCells(html);
+  const targets = cells.length ? cells : [html];
+  return targets
+    .map(parseEmlHtmlSection)
+    .filter((section) => section && (section.title || section.summaries.length || section.body.length));
+}
+
+function extractHtmlTableCells(html) {
+  const cells = [];
+  const pattern = /<td\b[^>]*>([\s\S]*?)<\/td>/gi;
+  let match;
+
+  while ((match = pattern.exec(html || "")) !== null) {
+    const text = htmlInlineText(match[1]);
+    if (isBodyLabel(text) || new RegExp(`${KR_BODY}\\s*${LABEL_COLON}`).test(text)) {
+      cells.push(match[1]);
+    }
+  }
+
+  return cells;
+}
+
+function parseEmlHtmlSection(html) {
+  const paragraphs = [...(html || "").matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/gi)]
+    .map((match) => ({ html: match[1], text: cleanText(htmlInlineText(match[1])) }))
+    .filter((paragraph) => paragraph.text || hasInlineImage(paragraph.html));
+  if (!paragraphs.length) return null;
+
+  const bodyIndex = paragraphs.findIndex((paragraph) => isBodyLabel(paragraph.text) || isBodyPrefix(paragraph.text));
+  const sourceParagraphs = bodyIndex >= 0 ? paragraphs.slice(bodyIndex + 1) : paragraphs;
+  const body = [];
+
+  sourceParagraphs.forEach((paragraph) => {
+    if (isTitleLabel(paragraph.text) || isTitlePrefix(paragraph.text) || isBodyLabel(paragraph.text) || isBodyPrefix(paragraph.text)) return;
+    if (isHtmlImageNote(paragraph.text) || hasInlineImage(paragraph.html)) {
+      body.push({ type: "image", text: KR_IMAGE });
+      return;
+    }
+    if (isFootnoteBlock([paragraph.text])) {
+      body.push({ type: "footnote", text: paragraph.text });
+      return;
+    }
+
+    const htmlText = convertWordInlineHtml(paragraph.html);
+    if (!htmlText) return;
+    if (isHtmlBullet(paragraph.text)) {
+      body.push({ type: "richIndent", html: htmlText });
+      return;
+    }
+    if (isHtmlHeading(paragraph.html, paragraph.text)) {
+      body.push({ type: hasColor(paragraph.html, "#26247B") ? "richHeading" : "richBold", html: htmlText });
+      return;
+    }
+    body.push({ type: "richParagraph", html: htmlText });
+  });
+
+  return { title: "", summaries: [], body: mergeCaptionAfterImage(body) };
+}
+
+function htmlInlineText(html) {
+  return decodeHtmlEntities(String(html || "")
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<o:p>\s*&nbsp;\s*<\/o:p>/gi, " ")
+    .replace(/<o:p>[\s\S]*?<\/o:p>/gi, " ")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/\s+/g, " ")
+    .trim());
+}
+
+function convertWordInlineHtml(html) {
+  let output = String(html || "")
+    .replace(/<o:p>\s*&nbsp;\s*<\/o:p>/gi, "")
+    .replace(/<o:p>[\s\S]*?<\/o:p>/gi, "")
+    .replace(/<br\s*\/?>/gi, "<br>\n");
+
+  output = output.replace(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi, (match, href, content) => {
+    const text = convertWordInlineHtml(content);
+    return `<a href="${escapeAttribute(decodeHtmlEntities(href))}" target="_blank"><u><font color="#3984c6">${text}</font></u></a>`;
+  });
+  output = output.replace(/<i\b[^>]*>([\s\S]*?)<\/i>/gi, '<span style="font-style:italic;">$1</span>');
+  output = output.replace(/<b\b[^>]*>([\s\S]*?)<\/b>/gi, "$1");
+  for (let count = 0; count < 6; count += 1) {
+    output = output.replace(/<span\b(?![^>]*(?:color:|font-style:\s*italic))[^>]*>([\s\S]*?)<\/span>/gi, "$1");
+  }
+  output = output.replace(/<span\b([^>]*)>([\s\S]*?)<\/span>/gi, (match, attributes, content) => {
+    const color = attributes.match(/color:\s*(#[0-9A-Fa-f]{6})/i)?.[1];
+    const italic = /font-style:\s*italic/i.test(attributes);
+    const styles = [];
+    if (italic) styles.push("font-style:italic;");
+    if (color) styles.push(`color:${color};`);
+    return styles.length ? `<span style="${styles.join(" ")}">${content}</span>` : content;
+  });
+
+  return decodeHtmlEntities(output)
+    .replace(/<(?!\/?(span|u|font|a|br)\b)[^>]+>/gi, "")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\s+/g, " ")
+    .replace(/\s*(<br>\n)\s*/g, "$1")
+    .trim();
+}
+
+function decodeHtmlEntities(value) {
+  return String(value || "")
+    .replace(/&#(\d+);/g, (match, code) => String.fromCodePoint(Number(code)))
+    .replace(/&#x([0-9a-f]+);/gi, (match, code) => String.fromCodePoint(parseInt(code, 16)))
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#039;/gi, "'");
+}
+
+function isHtmlImageNote(text) {
+  return /^\(.+\)$/.test(text || "") && /이미지|썸네일/.test(text || "");
+}
+
+function hasInlineImage(html) {
+  return /<(img|v:imagedata)\b/i.test(html || "") || /src=["']cid:/i.test(html || "");
+}
+
+function isHtmlBullet(text) {
+  return /^[•·▪\-]\s*/.test(text || "");
+}
+
+function isHtmlHeading(html, text) {
+  if ((text || "").length > 120) return false;
+  if (isHtmlBullet(text)) return false;
+  if (hasColor(html, "#26247B")) return true;
+  if (/<a\b/i.test(html || "")) return false;
+
+  const boldText = [...String(html || "").matchAll(/<(b|strong)\b[^>]*>([\s\S]*?)<\/\1>/gi)]
+    .map((match) => cleanText(htmlInlineText(match[2])))
+    .join(" ");
+  return boldText.length > 0 && cleanText(text).startsWith(boldText);
+}
+
+function hasColor(html, color) {
+  const normalized = String(html || "").toLowerCase();
+  return normalized.includes(`color:${color.toLowerCase()}`) || normalized.includes(`color: ${color.toLowerCase()}`);
+}
+
 function isolatePlainTextBox(text) {
   const normalized = normalizeEmailText(text);
   const plainMatch = normalized.match(/(?:^|\n)\s*Plain\s*text\s*(?:\n|$)/i);
@@ -546,7 +699,7 @@ const KR_THANKS = "\uAC10\uC0AC\uD569\uB2C8\uB2E4";
 const KR_FROM = "\uC62C\uB9BC";
 const KR_REFERENCE = "\uCC38\uACE0";
 const KR_SOURCE = "\uCD9C\uCC98";
-const LABEL_COLON = "[:\uFF1A]";
+const LABEL_COLON = "[:\uFF1A)]";
 
 function stripEmailHeaderBlock(text) {
   return normalizeEmailText(text)
@@ -572,19 +725,23 @@ function stripFooterBlock(text) {
 }
 
 function isBodyLabel(line) {
-  return new RegExp(`^\\s*${KR_BODY}\\s*[:：]?\\s*$`, "i").test(line || "");
+  return new RegExp(`^\\s*${KR_BODY}\\s*${LABEL_COLON}?\\s*$`, "i").test(line || "");
 }
 
 function isTitleLabel(line) {
-  return new RegExp(`^\\s*${KR_TITLE}\\s*[:：]?\\s*$`, "i").test(line || "");
+  return new RegExp(`^\\s*${KR_TITLE}\\s*${LABEL_COLON}?\\s*$`, "i").test(line || "");
 }
 
 function isTitlePrefix(line) {
-  return new RegExp(`^\\s*${KR_TITLE}\\s*[:：]`, "i").test(line || "");
+  return new RegExp(`^\\s*${KR_TITLE}\\s*${LABEL_COLON}`, "i").test(line || "");
+}
+
+function isBodyPrefix(line) {
+  return new RegExp(`^\\s*${KR_BODY}\\s*${LABEL_COLON}`, "i").test(line || "");
 }
 
 function stripBodyPrefix(line) {
-  return String(line || "").replace(new RegExp(`^\\s*${KR_BODY}\\s*[:：]\\s*`, "i"), "");
+  return String(line || "").replace(new RegExp(`^\\s*${KR_BODY}\\s*${LABEL_COLON}\\s*`, "i"), "");
 }
 
 function mergeCaptionAfterImage(items) {
@@ -674,9 +831,10 @@ function buildAdminHtml(extracted) {
 }
 
 function buildEmlAdminHtml(sections) {
+  const imageState = { urls: currentImageUrls(), index: 0 };
   return sections
     .map((section, index) => {
-      const html = buildEmlSectionHtml(section);
+      const html = buildEmlSectionHtml(section, imageState);
       if (sections.length <= 1) return html;
       return `<!-- EML section ${index + 1} -->\n${html}`;
     })
@@ -684,25 +842,25 @@ function buildEmlAdminHtml(sections) {
     .trim();
 }
 
-function buildEmlSectionHtml(section) {
+function buildEmlSectionHtml(section, imageState = { urls: currentImageUrls(), index: 0 }) {
   const html = [];
   const title = cleanText(section.title);
 
   if (title) {
-    html.push(`<p class="tit_mid center bold">\n${applyProductRules(escapeHtml(title))}\n</p>`);
+    html.push(`<p class="tit_mid center bold">\n${escapeHtml(title)}\n</p>`);
     html.push(blank());
   }
 
   if (section.summaries.length) {
     section.summaries.forEach((summary) => {
-      html.push(`<p class="bold">\n${applyInlineFootnotes(applyProductRules(escapeHtml(summary)))}\n</p>`);
+      html.push(`<p class="bold">\n${applyInlineFootnotes(escapeHtml(summary))}\n</p>`);
     });
     html.push(blank());
   }
 
   section.body.forEach((block, index) => {
     if (block.type === "image") {
-      html.push(`<p>${KR_IMAGE}</p>`);
+      html.push(emlImageBlock(imageState));
       return;
     }
 
@@ -718,6 +876,27 @@ function buildEmlSectionHtml(section) {
       return;
     }
 
+    if (block.type === "richHeading") {
+      html.push(`<p style="font-weight:bold; color:#26247B;">\n${block.html}\n</p>`);
+      return;
+    }
+
+    if (block.type === "richBold") {
+      html.push(`<p style="font-weight:bold;">\n${block.html}\n</p>`);
+      return;
+    }
+
+    if (block.type === "richIndent") {
+      html.push(`<p class="indent" style="font-align:left;">\n\t${block.html}\n</p>`);
+      return;
+    }
+
+    if (block.type === "richParagraph") {
+      html.push(`<p>\n${applyInlineFootnotes(block.html)}\n</p>`);
+      if (section.body[index + 1]) html.push(blank());
+      return;
+    }
+
     html.push(`<p>\n${formatParagraphText(block.text)}\n</p>`);
     if (section.body[index + 1]) html.push(blank());
   });
@@ -728,9 +907,19 @@ function buildEmlSectionHtml(section) {
 function formatParagraphText(text) {
   return (text || "")
     .split(/\n/)
-    .map((line) => applyInlineFootnotes(applyProductRules(escapeHtml(cleanText(line)))))
+    .map((line) => applyInlineFootnotes(escapeHtml(cleanText(line))))
     .filter(Boolean)
     .join("<br>\n");
+}
+
+function currentImageUrls() {
+  return imageUrlsInput.value.split(/\n+/).map((url) => url.trim()).filter(Boolean);
+}
+
+function emlImageBlock(imageState) {
+  const url = imageState.urls[imageState.index];
+  imageState.index += 1;
+  return url ? imageBlock(url, imageState.index === 1 ? "70%" : "100%") : `<p>${KR_IMAGE}</p>`;
 }
 
 function applyInlineFootnotes(html) {
