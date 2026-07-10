@@ -384,9 +384,9 @@ function parseEmlPlainSections(plainTexts) {
     const text = normalizeEmailText(plainText);
     if (!text) return;
 
-    const markers = [...text.matchAll(/(?:^|\n)\s*제목\s*:\s*([\s\S]*?)\n\s*본문\s*:\s*/g)];
+    const markers = [...text.matchAll(new RegExp(`(?:^|\\n)\\s*${KR_TITLE}\\s*[:：]\\s*([\\s\\S]*?)\\n\\s*${KR_BODY}\\s*[:：]\\s*`, "g"))];
     if (!markers.length) {
-      const section = parseEmlBodySection(text);
+      const section = parseEmlBodySection(stripEmailHeaderBlock(text));
       if (section) sections.push(section);
       return;
     }
@@ -404,7 +404,7 @@ function parseEmlPlainSections(plainTexts) {
 }
 
 function parseEmlBodySection(bodyText) {
-  const blocks = normalizeEmailText(bodyText)
+  const blocks = stripEmailHeaderBlock(normalizeEmailText(bodyText))
     .split(/\n{2,}/)
     .map((block) => block.trim())
     .filter(Boolean);
@@ -425,7 +425,7 @@ function parseEmlBodySection(bodyText) {
     if (!lines.length) return;
 
     if (lines.every(isImagePlaceholder)) {
-      body.push({ type: "image", text: "이미지" });
+      body.push({ type: "image", text: KR_IMAGE });
       summaryOpen = false;
       return;
     }
@@ -448,7 +448,7 @@ function parseEmlBodySection(bodyText) {
           const before = lines.slice(0, index).join("\n");
           if (before) body.push({ type: "paragraph", text: before });
         }
-        body.push({ type: "image", text: "이미지" });
+        body.push({ type: "image", text: KR_IMAGE });
         const after = lines.slice(index + 1).join("\n");
         if (after) body.push({ type: "paragraph", text: after });
       }
@@ -468,16 +468,49 @@ function parseEmlBodySection(bodyText) {
 function splitBlockLines(block) {
   return (block || "")
     .split(/\n/)
+    .map((line) => stripBodyPrefix(line))
     .map((line) => cleanText(line))
     .filter(Boolean)
-    .filter((line) => !/^본문\s*:?\s*$/i.test(line));
+    .filter((line) => !isBodyLabel(line))
+    .filter((line) => !isTitleLabel(line))
+    .filter((line) => !isTitlePrefix(line));
 }
 
 function isImagePlaceholder(line) {
   return /^\[cid:[^\]]+\]$/i.test(line)
     || /^<image>$/i.test(line)
-    || /^이미지$/i.test(line)
+    || new RegExp(`^${KR_IMAGE}$`, "i").test(line)
     || /\.(png|jpe?g|gif|webp)$/i.test(line);
+}
+
+const KR_TITLE = "\uC81C\uBAA9";
+const KR_BODY = "\uBCF8\uBB38";
+const KR_IMAGE = "\uC774\uBBF8\uC9C0";
+
+function stripEmailHeaderBlock(text) {
+  return normalizeEmailText(text)
+    .replace(new RegExp(`^\\s*${KR_TITLE}\\s*[:：][\\s\\S]*?\\n\\s*${KR_BODY}\\s*[:：]\\s*`, "i"), "")
+    .split(/\n/)
+    .map((line) => stripBodyPrefix(line))
+    .filter((line) => !isBodyLabel(line) && !isTitleLabel(line) && !isTitlePrefix(line))
+    .join("\n")
+    .trim();
+}
+
+function isBodyLabel(line) {
+  return new RegExp(`^\\s*${KR_BODY}\\s*[:：]?\\s*$`, "i").test(line || "");
+}
+
+function isTitleLabel(line) {
+  return new RegExp(`^\\s*${KR_TITLE}\\s*[:：]?\\s*$`, "i").test(line || "");
+}
+
+function isTitlePrefix(line) {
+  return new RegExp(`^\\s*${KR_TITLE}\\s*[:：]`, "i").test(line || "");
+}
+
+function stripBodyPrefix(line) {
+  return String(line || "").replace(new RegExp(`^\\s*${KR_BODY}\\s*[:：]\\s*`, "i"), "");
 }
 
 function mergeCaptionAfterImage(items) {
@@ -595,7 +628,7 @@ function buildEmlSectionHtml(section) {
 
   section.body.forEach((block, index) => {
     if (block.type === "image") {
-      html.push("<p>이미지</p>");
+      html.push(`<p>${KR_IMAGE}</p>`);
       return;
     }
 
