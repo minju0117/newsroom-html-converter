@@ -404,7 +404,7 @@ function parseEmlPlainSections(plainTexts) {
 }
 
 function parseEmlBodySection(bodyText) {
-  const blocks = stripEmailHeaderBlock(normalizeEmailText(bodyText))
+  const blocks = stripFooterBlock(stripEmailHeaderBlock(normalizeEmailText(bodyText)))
     .split(/\n{2,}/)
     .map((block) => block.trim())
     .filter(Boolean);
@@ -486,6 +486,8 @@ function isImagePlaceholder(line) {
 const KR_TITLE = "\uC81C\uBAA9";
 const KR_BODY = "\uBCF8\uBB38";
 const KR_IMAGE = "\uC774\uBBF8\uC9C0";
+const KR_THANKS = "\uAC10\uC0AC\uD569\uB2C8\uB2E4";
+const KR_FROM = "\uC62C\uB9BC";
 
 function stripEmailHeaderBlock(text) {
   return normalizeEmailText(text)
@@ -495,6 +497,20 @@ function stripEmailHeaderBlock(text) {
     .filter((line) => !isBodyLabel(line) && !isTitleLabel(line) && !isTitlePrefix(line))
     .join("\n")
     .trim();
+}
+
+function stripFooterBlock(text) {
+  const normalized = normalizeEmailText(text);
+  const footerPatterns = [
+    new RegExp(`\\n\\s*${KR_THANKS}[\\s\\S]*$`, "i"),
+    new RegExp(`\\n\\s*.*${KR_FROM}\\s*$[\\s\\S]*`, "i"),
+    /\n\s*Yeji\s+Lee[\s\S]*$/i,
+    /\n\s*Samyang\s+Corp\.[\s\S]*$/i,
+    /\n\s*This e-mail[\s\S]*$/i,
+    /\n\s*CONFIDENTIAL[\s\S]*$/i,
+  ];
+
+  return footerPatterns.reduce((result, pattern) => result.replace(pattern, ""), normalized).trim();
 }
 
 function isBodyLabel(line) {
@@ -532,7 +548,7 @@ function flattenEmlSection(section) {
 
 function buildAdminHtml(extracted) {
   if (extracted.format === "eml" && extracted.sections?.length) {
-    return buildEmlAdminHtml(extracted.sections);
+    return buildEmlAdminHtml([extracted.sections[0]]);
   }
 
   const mode = resolveMode(extracted);
