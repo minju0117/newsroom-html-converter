@@ -475,34 +475,35 @@ function parseEmlHtmlSection(html) {
   const title = titleIndex >= 0 ? cleanText(stripTitlePrefix(paragraphs[titleIndex].text)) : "";
   const body = [];
 
-  sourceParagraphs.forEach((paragraph) => {
-    if (isTitleLabel(paragraph.text) || isTitlePrefix(paragraph.text) || isBodyLabel(paragraph.text) || isBodyPrefix(paragraph.text)) return;
+  for (const paragraph of sourceParagraphs) {
+    if (isHtmlFooterStart(paragraph)) break;
+    if (isTitleLabel(paragraph.text) || isTitlePrefix(paragraph.text) || isBodyLabel(paragraph.text) || isBodyPrefix(paragraph.text)) continue;
     if (isHtmlImageNote(paragraph.text) || hasInlineImage(paragraph.html)) {
       body.push({ type: "image", text: KR_IMAGE });
-      return;
+      continue;
     }
     if (isFootnoteBlock([paragraph.text])) {
       body.push({ type: "footnote", text: paragraph.text });
-      return;
+      continue;
     }
 
     const htmlText = convertWordInlineHtml(paragraph.html);
-    if (!htmlText) return;
+    if (!htmlText) continue;
     const isCentered = isCenteredParagraph(paragraph);
-    if (title && paragraph.text === title) return;
+    if (title && paragraph.text === title) continue;
 
     if (isHtmlBullet(paragraph.text)) {
       body.push({ type: "richIndent", html: htmlText, text: paragraph.text });
-      return;
+      continue;
     }
     if (isHtmlHeading(paragraph.html, paragraph.text)) {
       body.push({ type: hasColor(paragraph.html, "#26247B") ? "richHeading" : "richBold", html: htmlText, text: paragraph.text });
-      return;
+      continue;
     }
     splitRichHtmlText(htmlText).forEach((chunk) => {
       body.push({ type: isCentered ? "richCenter" : "richParagraph", html: chunk, text: paragraph.text });
     });
-  });
+  }
 
   return { title, summaries: [], body: mergeCaptionAfterImage(body) };
 }
@@ -570,6 +571,16 @@ function isHtmlImageNote(text) {
 
 function isCenteredParagraph(paragraph) {
   return /align=["']center["']|text-align:\s*center/i.test(`${paragraph.attrs || ""} ${paragraph.html || ""}`);
+}
+
+function isHtmlFooterStart(paragraph) {
+  const text = cleanText(paragraph.text || "");
+  const html = paragraph.html || "";
+  return new RegExp(`^${KR_THANKS}`, "i").test(text)
+    || /^(Samyang Corp\.?|삼양사|13488,|T\.|E\.)\b/i.test(text)
+    || /yeji\.lee@samyang\.com/i.test(`${text} ${html}`)
+    || /samyang\.com/i.test(`${text} ${html}`)
+    || /본 메일은|지정 수신자|This e-mail is intended|unauthorized disclosure/i.test(text);
 }
 
 function splitRichHtmlText(html) {
