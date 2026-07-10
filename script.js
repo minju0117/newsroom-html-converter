@@ -734,7 +734,6 @@ function footnoteBlock(text) {
 
 function formatFootnoteLine(line) {
   return escapeHtml(line)
-    .replace(/\[(\d+)\]/g, "$1")
     .replace(/(https?:\/\/[^\s<]+)/g, (url) => `<a href="${escapeAttribute(url)}" target="_blank"><u><font color="#0000ff">${escapeHtml(url)}</font></u></a>`);
 }
 
