@@ -721,13 +721,6 @@ function buildDownloadFiles(extracted, finalHtml) {
   });
 }
 
-function guessSectionLanguage(section) {
-  const text = [section.title, ...section.summaries, ...section.body.map((block) => block.text)].join(" ");
-  if (/[가-힣]/.test(text)) return "ko";
-  if (/[A-Za-z]/.test(text)) return "en";
-  return "section";
-}
-
 function uniqueSuffix(base, index, usedNames) {
   let suffix = base || `section-${index + 1}`;
   if (!usedNames.has(suffix)) {
