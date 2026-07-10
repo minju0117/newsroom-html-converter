@@ -260,7 +260,7 @@ function slideNumber(path) {
 function readEml(text) {
   const htmlPart = extractMimePart(text, "text/html");
   const plainParts = extractMimeParts(text, "text/plain");
-  const htmlText = htmlPart ? decodeMimeBody(htmlPart.body, htmlPart.encoding) : "";
+  const htmlText = htmlPart ? decodeMimeBody(htmlPart.body, htmlPart.encoding, htmlPart.charset) : "";
   const htmlSections = htmlText ? parseEmlHtmlSections(htmlText) : [];
   if (htmlSections.length) {
     const blocks = htmlSections.flatMap((section) => flattenEmlSection(section));
@@ -269,7 +269,7 @@ function readEml(text) {
   }
 
   const plainTexts = plainParts
-    .map((part) => decodeMimeBody(part.body, part.encoding))
+    .map((part) => decodeMimeBody(part.body, part.encoding, part.charset))
     .map(normalizeEmailText)
     .map(isolatePlainTextBox)
     .filter(Boolean);
@@ -314,12 +314,13 @@ function extractMimePart(text, contentType) {
   const match = text.match(pattern);
   if (!match) return null;
   const section = match[1];
+  const charset = normalizeCharset(match[0].match(/charset="?([^";\r\n]+)"?/i)?.[1] || "");
   const encoding = section.match(/Content-Transfer-Encoding:\s*([^\n\r]+)/i)?.[1]?.trim().toLowerCase() || "";
   const body = section
     .replace(/Content-Transfer-Encoding:[^\n]*\n/gi, "")
     .replace(/Content-[^\n]*\n/gi, "")
     .trim();
-  return { body, encoding };
+  return { body, encoding, charset };
 }
 
 function extractMimeParts(text, contentType) {
@@ -329,30 +330,31 @@ function extractMimeParts(text, contentType) {
 
   while ((match = pattern.exec(text)) !== null) {
     const section = match[1];
+    const charset = normalizeCharset(match[0].match(/charset="?([^";\r\n]+)"?/i)?.[1] || "");
     const encoding = section.match(/Content-Transfer-Encoding:\s*([^\n\r]+)/i)?.[1]?.trim().toLowerCase() || "";
     const body = section
       .replace(/Content-Transfer-Encoding:[^\n]*\n/gi, "")
       .replace(/Content-[^\n]*\n/gi, "")
       .trim();
-    if (body) parts.push({ body, encoding });
+    if (body) parts.push({ body, encoding, charset });
   }
 
   return parts;
 }
 
-function decodeMimeBody(value, encoding) {
-  if (encoding === "base64") return decodeBase64Utf8(value);
-  if (encoding === "quoted-printable") return decodeQuotedPrintableUtf8(value);
+function decodeMimeBody(value, encoding, charset = "utf-8") {
+  if (encoding === "base64") return decodeBase64Text(value, charset);
+  if (encoding === "quoted-printable") return decodeQuotedPrintableText(value, charset);
   return value || "";
 }
 
-function decodeBase64Utf8(value) {
+function decodeBase64Text(value, charset) {
   const binary = atob((value || "").replace(/\s/g, ""));
   const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
-  return new TextDecoder("utf-8").decode(bytes);
+  return decodeBytes(bytes, charset);
 }
 
-function decodeQuotedPrintableUtf8(value) {
+function decodeQuotedPrintableText(value, charset) {
   const bytes = [];
   const normalized = (value || "").replace(/=\r?\n/g, "");
   for (let index = 0; index < normalized.length; index += 1) {
@@ -363,7 +365,23 @@ function decodeQuotedPrintableUtf8(value) {
       bytes.push(normalized.charCodeAt(index));
     }
   }
-  return new TextDecoder("utf-8").decode(new Uint8Array(bytes));
+  return decodeBytes(new Uint8Array(bytes), charset);
+}
+
+function decodeBytes(bytes, charset) {
+  try {
+    return new TextDecoder(normalizeCharset(charset)).decode(bytes);
+  } catch (error) {
+    return new TextDecoder("utf-8").decode(bytes);
+  }
+}
+
+function normalizeCharset(charset) {
+  const normalized = String(charset || "utf-8").trim().toLowerCase();
+  if (["ks_c_5601-1987", "ks_c_5601", "x-windows-949", "windows-949", "cp949", "euc_kr"].includes(normalized)) {
+    return "euc-kr";
+  }
+  return normalized || "utf-8";
 }
 
 function htmlToText(html) {
@@ -448,7 +466,13 @@ function parseEmlHtmlSection(html) {
   if (!paragraphs.length) return null;
 
   const bodyIndex = paragraphs.findIndex((paragraph) => isBodyLabel(paragraph.text) || isBodyPrefix(paragraph.text));
-  const sourceParagraphs = bodyIndex >= 0 ? paragraphs.slice(bodyIndex + 1) : paragraphs;
+  const titleIndex = paragraphs.findIndex((paragraph) => isTitlePrefix(paragraph.text));
+  const sourceParagraphs = bodyIndex >= 0
+    ? paragraphs.slice(bodyIndex + 1)
+    : titleIndex >= 0
+      ? paragraphs.slice(titleIndex + 1)
+      : paragraphs;
+  const title = titleIndex >= 0 ? cleanText(stripTitlePrefix(paragraphs[titleIndex].text)) : "";
   const body = [];
 
   sourceParagraphs.forEach((paragraph) => {
@@ -475,7 +499,7 @@ function parseEmlHtmlSection(html) {
     body.push({ type: "richParagraph", html: htmlText });
   });
 
-  return { title: "", summaries: [], body: mergeCaptionAfterImage(body) };
+  return { title, summaries: [], body: mergeCaptionAfterImage(body) };
 }
 
 function htmlInlineText(html) {
@@ -704,6 +728,7 @@ const LABEL_COLON = "[:\uFF1A)]";
 function stripEmailHeaderBlock(text) {
   return normalizeEmailText(text)
     .replace(new RegExp(`^[\\s\\S]*?\\n\\s*${KR_BODY}\\s*${LABEL_COLON}\\s*`, "i"), "")
+    .replace(new RegExp(`^[\\s\\S]*?\\n\\s*${KR_TITLE}\\s*${LABEL_COLON}\\s*`, "i"), `${KR_TITLE}: `)
     .split(/\n/)
     .map((line) => stripBodyPrefix(line))
     .filter((line) => !isBodyLabel(line) && !isTitleLabel(line) && !isTitlePrefix(line))
@@ -734,6 +759,10 @@ function isTitleLabel(line) {
 
 function isTitlePrefix(line) {
   return new RegExp(`^\\s*${KR_TITLE}\\s*${LABEL_COLON}`, "i").test(line || "");
+}
+
+function stripTitlePrefix(line) {
+  return String(line || "").replace(new RegExp(`^\\s*${KR_TITLE}\\s*${LABEL_COLON}\\s*`, "i"), "");
 }
 
 function isBodyPrefix(line) {
@@ -1083,6 +1112,7 @@ function cleanText(value) {
     .replace(/\u00a0/g, " ")
     .replace(/[★_]/g, "")
     .replace(/\s+/g, " ")
+    .replace(/\b(Nexweet|Fiberest|Fibernova)�/g, "$1®")
     .replace(/Allu\s*lose/gi, "Allulose")
     .replace(/form\s*ulation/gi, "formulation")
     .replace(/re\s*cipes/gi, "recipes")
