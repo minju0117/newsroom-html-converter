@@ -243,6 +243,32 @@ h2 {
   padding: 0 12px;
 }
 
+.section-tabs {
+  display: flex;
+  gap: 8px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+  background: #fbfcff;
+}
+
+.section-tabs[hidden] {
+  display: none;
+}
+
+.section-tabs button {
+  min-height: 34px;
+  padding: 0 14px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.section-tabs button.active {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
 .newsroom-preview {
   min-height: 500px;
   padding: 28px;

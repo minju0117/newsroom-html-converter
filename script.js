@@ -3,6 +3,7 @@ const state = {
   convertedHtml: "",
   previewHtml: "",
   convertedFiles: [],
+  activeFileIndex: 0,
   extracted: null,
 };
 
@@ -21,6 +22,7 @@ const sourceInput = document.querySelector("#sourceInput");
 const preview = document.querySelector("#preview");
 const htmlOutput = document.querySelector("#htmlOutput");
 const convertStatus = document.querySelector("#convertStatus");
+const sectionTabs = document.querySelector("#sectionTabs");
 
 const NS = {
   w: "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
@@ -76,13 +78,11 @@ convertButton.addEventListener("click", async () => {
   try {
     state.extracted = await readFile(state.file);
     const finalHtml = buildAdminHtml(state.extracted);
-    const previewDocument = buildPreviewDocument(finalHtml);
 
-    state.convertedHtml = finalHtml;
-    state.previewHtml = previewDocument;
     state.convertedFiles = buildDownloadFiles(state.extracted, finalHtml);
-    htmlOutput.value = finalHtml;
-    preview.innerHTML = finalHtml;
+    state.activeFileIndex = 0;
+    renderSectionTabs();
+    setActiveFile(0);
     setStatus("변환 완료");
     setButtons(true);
     updateFileMeta(state.extracted);
@@ -120,8 +120,11 @@ function setFile(file) {
   state.convertedHtml = "";
   state.previewHtml = "";
   state.convertedFiles = [];
+  state.activeFileIndex = 0;
   state.extracted = null;
   htmlOutput.value = "";
+  sectionTabs.hidden = true;
+  sectionTabs.innerHTML = "";
   preview.innerHTML = '<p class="empty-state">변환하기를 누르면 결과가 표시됩니다.</p>';
   fileMeta.textContent = `${file.name} · ${formatBytes(file.size)}`;
   convertButton.disabled = false;
@@ -136,6 +139,35 @@ function setButtons(hasOutput) {
   copyButton.disabled = !hasOutput;
   downloadButton.disabled = !hasOutput;
   downloadPreviewButton.disabled = !hasOutput;
+}
+
+function renderSectionTabs() {
+  sectionTabs.innerHTML = "";
+  sectionTabs.hidden = state.convertedFiles.length <= 1;
+
+  state.convertedFiles.forEach((file, index) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = file.label || `Section ${index + 1}`;
+    button.classList.toggle("active", index === state.activeFileIndex);
+    button.addEventListener("click", () => setActiveFile(index));
+    sectionTabs.appendChild(button);
+  });
+}
+
+function setActiveFile(index) {
+  const file = state.convertedFiles[index] || state.convertedFiles[0];
+  if (!file) return;
+
+  state.activeFileIndex = index;
+  state.convertedHtml = file.html;
+  state.previewHtml = buildPreviewDocument(file.html);
+  htmlOutput.value = file.html;
+  preview.innerHTML = file.html;
+
+  [...sectionTabs.querySelectorAll("button")].forEach((button, buttonIndex) => {
+    button.classList.toggle("active", buttonIndex === index);
+  });
 }
 
 function setStatus(message, isError = false) {
@@ -671,11 +703,11 @@ function formatParagraphText(text) {
 
 function buildDownloadFiles(extracted, finalHtml) {
   if (extracted.format !== "eml" || !extracted.sections?.length) {
-    return [{ name: "newsroom-upload.html", html: finalHtml }];
+    return [{ name: "newsroom-upload.html", label: "HTML", html: finalHtml }];
   }
 
   if (extracted.sections.length === 1) {
-    return [{ name: "newsroom-upload.html", html: buildEmlAdminHtml(extracted.sections) }];
+    return [{ name: "newsroom-upload.html", label: sectionLabel(extracted.sections[0], 0), html: buildEmlAdminHtml(extracted.sections) }];
   }
 
   const usedNames = new Set();
@@ -683,6 +715,7 @@ function buildDownloadFiles(extracted, finalHtml) {
     const suffix = uniqueSuffix(guessSectionLanguage(section), index, usedNames);
     return {
       name: `newsroom-upload-${suffix}.html`,
+      label: sectionLabel(section, index),
       html: buildEmlAdminHtml([section]),
     };
   });
@@ -705,6 +738,20 @@ function uniqueSuffix(base, index, usedNames) {
   suffix = `${base}-${index + 1}`;
   usedNames.add(suffix);
   return suffix;
+}
+
+function guessSectionLanguage(section) {
+  const text = [section.title, ...section.summaries, ...section.body.map((block) => block.text)].join(" ");
+  if (/[\uAC00-\uD7A3]/.test(text)) return "ko";
+  if (/[A-Za-z]/.test(text)) return "en";
+  return "section";
+}
+
+function sectionLabel(section, index) {
+  const language = guessSectionLanguage(section);
+  if (language === "ko") return "국문";
+  if (language === "en") return "영문";
+  return `섹션 ${index + 1}`;
 }
 
 function resolveMode(extracted) {
