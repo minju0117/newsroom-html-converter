@@ -537,7 +537,6 @@ function stripFooterBlock(text) {
     new RegExp(`\\n\\s*${KR_THANKS}[\\s\\S]*$`, "i"),
     new RegExp(`\\n\\s*.*${KR_FROM}\\s*$[\\s\\S]*`, "i"),
     /\n\s*Yeji\s+Lee[\s\S]*$/i,
-    /\n\s*Samyang\s+Corp\.[\s\S]*$/i,
     /\n\s*This e-mail[\s\S]*$/i,
     /\n\s*CONFIDENTIAL[\s\S]*$/i,
   ];
