@@ -719,7 +719,7 @@ function formatParagraphText(text) {
 }
 
 function applyInlineFootnotes(html) {
-  return html.replace(/\[(\d+)\]/g, '<span style="font-size: 12px;vertical-align: super;">$1</span>');
+  return html.replace(/\[(\d+)\]/g, '<span style="font-size: 12px;vertical-align: super;">[$1]</span>');
 }
 
 function footnoteBlock(text) {
