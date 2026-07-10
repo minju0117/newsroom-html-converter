@@ -310,7 +310,7 @@ async function readZipText(zip, path, optional = false) {
 }
 
 function extractMimePart(text, contentType) {
-  const pattern = new RegExp(`Content-Type:\\s*${contentType}[^\\n]*\\n([\\s\\S]*?)(?=\\n--|$)`, "i");
+  const pattern = new RegExp(`Content-Type:\\s*${contentType}[^\\n]*\\n([\\s\\S]*?)(?=\\n--[A-Za-z0-9_=-]{10,}|$)`, "i");
   const match = text.match(pattern);
   if (!match) return null;
   const section = match[1];
@@ -324,7 +324,7 @@ function extractMimePart(text, contentType) {
 }
 
 function extractMimeParts(text, contentType) {
-  const pattern = new RegExp(`Content-Type:\\s*${contentType}[^\\n]*\\n([\\s\\S]*?)(?=\\n--|$)`, "gi");
+  const pattern = new RegExp(`Content-Type:\\s*${contentType}[^\\n]*\\n([\\s\\S]*?)(?=\\n--[A-Za-z0-9_=-]{10,}|$)`, "gi");
   const parts = [];
   let match;
 
@@ -460,8 +460,8 @@ function extractHtmlTableCells(html) {
 }
 
 function parseEmlHtmlSection(html) {
-  const paragraphs = [...(html || "").matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/gi)]
-    .map((match) => ({ html: match[1], text: cleanText(htmlInlineText(match[1])) }))
+  const paragraphs = [...(html || "").matchAll(/<p\b([^>]*)>([\s\S]*?)<\/p>/gi)]
+    .map((match) => ({ attrs: match[1], html: match[2], text: cleanText(htmlInlineText(match[2])) }))
     .filter((paragraph) => paragraph.text || hasInlineImage(paragraph.html));
   if (!paragraphs.length) return null;
 
@@ -488,15 +488,20 @@ function parseEmlHtmlSection(html) {
 
     const htmlText = convertWordInlineHtml(paragraph.html);
     if (!htmlText) return;
+    const isCentered = isCenteredParagraph(paragraph);
+    if (title && paragraph.text === title) return;
+
     if (isHtmlBullet(paragraph.text)) {
-      body.push({ type: "richIndent", html: htmlText });
+      body.push({ type: "richIndent", html: htmlText, text: paragraph.text });
       return;
     }
     if (isHtmlHeading(paragraph.html, paragraph.text)) {
-      body.push({ type: hasColor(paragraph.html, "#26247B") ? "richHeading" : "richBold", html: htmlText });
+      body.push({ type: hasColor(paragraph.html, "#26247B") ? "richHeading" : "richBold", html: htmlText, text: paragraph.text });
       return;
     }
-    body.push({ type: "richParagraph", html: htmlText });
+    splitRichHtmlText(htmlText).forEach((chunk) => {
+      body.push({ type: isCentered ? "richCenter" : "richParagraph", html: chunk, text: paragraph.text });
+    });
   });
 
   return { title, summaries: [], body: mergeCaptionAfterImage(body) };
@@ -540,6 +545,7 @@ function convertWordInlineHtml(html) {
 
   return decodeHtmlEntities(output)
     .replace(/<(?!\/?(span|u|font|a|br)\b)[^>]+>/gi, "")
+    .replace(/\b(Nexweet|Fiberest|Fibernova)�/g, "$1®")
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\s+/g, " ")
     .replace(/\s*(<br>\n)\s*/g, "$1")
@@ -560,6 +566,17 @@ function decodeHtmlEntities(value) {
 
 function isHtmlImageNote(text) {
   return /^\(.+\)$/.test(text || "") && /이미지|썸네일/.test(text || "");
+}
+
+function isCenteredParagraph(paragraph) {
+  return /align=["']center["']|text-align:\s*center/i.test(`${paragraph.attrs || ""} ${paragraph.html || ""}`);
+}
+
+function splitRichHtmlText(html) {
+  return String(html || "")
+    .split(/(?:<br>\s*){2,}/i)
+    .map((chunk) => chunk.trim())
+    .filter(Boolean);
 }
 
 function hasInlineImage(html) {
@@ -778,6 +795,9 @@ function mergeCaptionAfterImage(items) {
     if (item.type === "paragraph" && index > 0 && items[index - 1].type === "image" && isCaption(item.text)) {
       return { ...item, type: "caption" };
     }
+    if ((item.type === "richParagraph" || item.type === "richCenter") && index > 0 && items[index - 1].type === "image") {
+      return { ...item, type: "richCaption" };
+    }
     return item;
   });
 }
@@ -917,6 +937,18 @@ function buildEmlSectionHtml(section, imageState = { urls: currentImageUrls(), i
 
     if (block.type === "richIndent") {
       html.push(`<p class="indent" style="font-align:left;">\n\t${block.html}\n</p>`);
+      return;
+    }
+
+    if (block.type === "richCaption") {
+      html.push(`<p class="center img_below_txt" style="text-align: center; ">\n${block.html}\n</p>`);
+      if (section.body[index + 1]) html.push(blank());
+      return;
+    }
+
+    if (block.type === "richCenter") {
+      html.push(`<p style="text-align: center; ">\n${applyInlineFootnotes(block.html)}\n</p>`);
+      if (section.body[index + 1]) html.push(blank());
       return;
     }
 
