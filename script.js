@@ -2,6 +2,7 @@ const state = {
   file: null,
   convertedHtml: "",
   previewHtml: "",
+  convertedFiles: [],
   extracted: null,
 };
 
@@ -79,6 +80,7 @@ convertButton.addEventListener("click", async () => {
 
     state.convertedHtml = finalHtml;
     state.previewHtml = previewDocument;
+    state.convertedFiles = buildDownloadFiles(state.extracted, finalHtml);
     htmlOutput.value = finalHtml;
     preview.innerHTML = finalHtml;
     setStatus("변환 완료");
@@ -96,8 +98,17 @@ copyButton.addEventListener("click", async () => {
   setStatus("HTML 복사 완료");
 });
 
-downloadButton.addEventListener("click", () => {
-  downloadText("newsroom-upload.html", state.convertedHtml);
+downloadButton.addEventListener("click", async () => {
+  if (state.convertedFiles.length > 1 && window.JSZip) {
+    const zip = new JSZip();
+    state.convertedFiles.forEach((file) => zip.file(file.name, file.html));
+    const blob = await zip.generateAsync({ type: "blob" });
+    downloadBlob("newsroom-upload-html.zip", blob);
+    return;
+  }
+
+  const [file] = state.convertedFiles;
+  downloadText(file?.name || "newsroom-upload.html", file?.html || state.convertedHtml);
 });
 
 downloadPreviewButton.addEventListener("click", () => {
@@ -108,6 +119,7 @@ function setFile(file) {
   state.file = file;
   state.convertedHtml = "";
   state.previewHtml = "";
+  state.convertedFiles = [];
   state.extracted = null;
   htmlOutput.value = "";
   preview.innerHTML = '<p class="empty-state">변환하기를 누르면 결과가 표시됩니다.</p>';
@@ -215,16 +227,18 @@ function slideNumber(path) {
 
 function readEml(text) {
   const htmlPart = extractMimePart(text, "text/html");
-  const plainPart = extractMimePart(text, "text/plain");
-  const raw = plainPart
-    ? decodeMimeBody(plainPart.body, plainPart.encoding)
+  const plainParts = extractMimeParts(text, "text/plain");
+  const plainTexts = plainParts
+    .map((part) => decodeMimeBody(part.body, part.encoding))
+    .map(normalizeEmailText)
+    .filter(Boolean);
+  const raw = plainTexts.length
+    ? plainTexts.join("\n\n")
     : htmlToText(decodeMimeBody(htmlPart?.body || text, htmlPart?.encoding || ""));
-  const blocks = splitEmailParagraphs(raw)
-    .map(cleanText)
-    .filter(Boolean)
-    .map((line) => ({ type: "paragraph", text: line }));
+  const sections = parseEmlPlainSections(plainTexts.length ? plainTexts : [raw]);
+  const blocks = sections.flatMap((section) => flattenEmlSection(section));
   const attachments = [...text.matchAll(/filename="?([^"\r\n;]+)"?/gi)].map((match) => match[1]);
-  return { format: "eml", blocks, mediaCount: attachments.length, attachments };
+  return { format: "eml", blocks, sections, mediaCount: attachments.length, attachments };
 }
 
 function readHtml(text, format) {
@@ -265,6 +279,24 @@ function extractMimePart(text, contentType) {
     .replace(/Content-[^\n]*\n/gi, "")
     .trim();
   return { body, encoding };
+}
+
+function extractMimeParts(text, contentType) {
+  const pattern = new RegExp(`Content-Type:\\s*${contentType}[^\\n]*\\n([\\s\\S]*?)(?=\\n--|$)`, "gi");
+  const parts = [];
+  let match;
+
+  while ((match = pattern.exec(text)) !== null) {
+    const section = match[1];
+    const encoding = section.match(/Content-Transfer-Encoding:\s*([^\n\r]+)/i)?.[1]?.trim().toLowerCase() || "";
+    const body = section
+      .replace(/Content-Transfer-Encoding:[^\n]*\n/gi, "")
+      .replace(/Content-[^\n]*\n/gi, "")
+      .trim();
+    if (body) parts.push({ body, encoding });
+  }
+
+  return parts;
 }
 
 function decodeMimeBody(value, encoding) {
@@ -335,7 +367,141 @@ function splitEmailParagraphs(text) {
   return result;
 }
 
+function normalizeEmailText(text) {
+  return (text || "")
+    .replace(/\r/g, "")
+    .replace(/\u00a0/g, " ")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n[ \t]+/g, "\n")
+    .replace(/\n{4,}/g, "\n\n\n")
+    .trim();
+}
+
+function parseEmlPlainSections(plainTexts) {
+  const sections = [];
+
+  plainTexts.forEach((plainText) => {
+    const text = normalizeEmailText(plainText);
+    if (!text) return;
+
+    const markers = [...text.matchAll(/(?:^|\n)\s*제목\s*:\s*([\s\S]*?)\n\s*본문\s*:\s*/g)];
+    if (!markers.length) {
+      const section = parseEmlBodySection(text);
+      if (section) sections.push(section);
+      return;
+    }
+
+    markers.forEach((marker, index) => {
+      const start = marker.index + marker[0].length;
+      const end = markers[index + 1]?.index ?? text.length;
+      const bodyText = text.slice(start, end).trim();
+      const section = parseEmlBodySection(bodyText);
+      if (section) sections.push(section);
+    });
+  });
+
+  return sections;
+}
+
+function parseEmlBodySection(bodyText) {
+  const blocks = normalizeEmailText(bodyText)
+    .split(/\n{2,}/)
+    .map((block) => block.trim())
+    .filter(Boolean);
+  if (!blocks.length) return null;
+
+  const firstLines = splitBlockLines(blocks.shift());
+  const title = cleanText(firstLines.shift() || "");
+  const contentBlocks = [];
+  if (firstLines.length) contentBlocks.push(firstLines.join("\n"));
+  contentBlocks.push(...blocks);
+
+  const summaries = [];
+  const body = [];
+  let summaryOpen = true;
+
+  contentBlocks.forEach((block) => {
+    const lines = splitBlockLines(block);
+    if (!lines.length) return;
+
+    if (lines.every(isImagePlaceholder)) {
+      body.push({ type: "image", text: "이미지" });
+      summaryOpen = false;
+      return;
+    }
+
+    if (lines.length === 1 && isCaption(lines[0])) {
+      body.push({ type: "caption", text: lines[0] });
+      summaryOpen = false;
+      return;
+    }
+
+    if (summaryOpen && lines.every((line) => /^-\s*/.test(line))) {
+      summaries.push(...lines);
+      return;
+    }
+
+    summaryOpen = false;
+    lines.forEach((line, index) => {
+      if (isImagePlaceholder(line)) {
+        if (index > 0) {
+          const before = lines.slice(0, index).join("\n");
+          if (before) body.push({ type: "paragraph", text: before });
+        }
+        body.push({ type: "image", text: "이미지" });
+        const after = lines.slice(index + 1).join("\n");
+        if (after) body.push({ type: "paragraph", text: after });
+      }
+    });
+    if (!lines.some(isImagePlaceholder)) {
+      body.push({ type: "paragraph", text: lines.join("\n") });
+    }
+  });
+
+  return {
+    title,
+    summaries,
+    body: mergeCaptionAfterImage(body),
+  };
+}
+
+function splitBlockLines(block) {
+  return (block || "")
+    .split(/\n/)
+    .map((line) => cleanText(line))
+    .filter(Boolean)
+    .filter((line) => !/^본문\s*:?\s*$/i.test(line));
+}
+
+function isImagePlaceholder(line) {
+  return /^\[cid:[^\]]+\]$/i.test(line)
+    || /^<image>$/i.test(line)
+    || /^이미지$/i.test(line)
+    || /\.(png|jpe?g|gif|webp)$/i.test(line);
+}
+
+function mergeCaptionAfterImage(items) {
+  return items.map((item, index) => {
+    if (item.type === "paragraph" && index > 0 && items[index - 1].type === "image" && isCaption(item.text)) {
+      return { ...item, type: "caption" };
+    }
+    return item;
+  });
+}
+
+function flattenEmlSection(section) {
+  return [
+    { type: "title", text: section.title },
+    ...section.summaries.map((text) => ({ type: "summary", text })),
+    ...section.body,
+  ].filter((block) => block.text);
+}
+
 function buildAdminHtml(extracted) {
+  if (extracted.format === "eml" && extracted.sections?.length) {
+    return buildEmlAdminHtml(extracted.sections);
+  }
+
   const mode = resolveMode(extracted);
   const imageUrls = imageUrlsInput.value.split(/\n+/).map((url) => url.trim()).filter(Boolean);
   const videoUrl = videoUrlInput.value.trim();
@@ -398,6 +564,98 @@ function buildAdminHtml(extracted) {
   }
 
   return html.join("\n").replace(/\n{4,}/g, "\n\n").trim();
+}
+
+function buildEmlAdminHtml(sections) {
+  return sections
+    .map((section, index) => {
+      const html = buildEmlSectionHtml(section);
+      if (sections.length <= 1) return html;
+      return `<!-- EML section ${index + 1} -->\n${html}`;
+    })
+    .join("\n\n")
+    .trim();
+}
+
+function buildEmlSectionHtml(section) {
+  const html = [];
+  const title = cleanText(section.title);
+
+  if (title) {
+    html.push(`<p class="tit_mid center bold">\n${applyProductRules(escapeHtml(title))}\n</p>`);
+    html.push(blank());
+  }
+
+  if (section.summaries.length) {
+    section.summaries.forEach((summary) => {
+      html.push(`<p class="bold">\n${applyProductRules(escapeHtml(summary))}\n</p>`);
+    });
+    html.push(blank());
+  }
+
+  section.body.forEach((block, index) => {
+    if (block.type === "image") {
+      html.push("<p>이미지</p>");
+      return;
+    }
+
+    if (block.type === "caption") {
+      html.push(captionBlock(block.text));
+      if (section.body[index + 1]) html.push(blank());
+      return;
+    }
+
+    html.push(`<p>\n${formatParagraphText(block.text)}\n</p>`);
+    if (section.body[index + 1]) html.push(blank());
+  });
+
+  return html.join("\n").replace(/\n{4,}/g, "\n\n").trim();
+}
+
+function formatParagraphText(text) {
+  return (text || "")
+    .split(/\n/)
+    .map((line) => applyProductRules(escapeHtml(cleanText(line))))
+    .filter(Boolean)
+    .join("<br>\n");
+}
+
+function buildDownloadFiles(extracted, finalHtml) {
+  if (extracted.format !== "eml" || !extracted.sections?.length) {
+    return [{ name: "newsroom-upload.html", html: finalHtml }];
+  }
+
+  if (extracted.sections.length === 1) {
+    return [{ name: "newsroom-upload.html", html: buildEmlAdminHtml(extracted.sections) }];
+  }
+
+  const usedNames = new Set();
+  return extracted.sections.map((section, index) => {
+    const suffix = uniqueSuffix(guessSectionLanguage(section), index, usedNames);
+    return {
+      name: `newsroom-upload-${suffix}.html`,
+      html: buildEmlAdminHtml([section]),
+    };
+  });
+}
+
+function guessSectionLanguage(section) {
+  const text = [section.title, ...section.summaries, ...section.body.map((block) => block.text)].join(" ");
+  if (/[가-힣]/.test(text)) return "ko";
+  if (/[A-Za-z]/.test(text)) return "en";
+  return "section";
+}
+
+function uniqueSuffix(base, index, usedNames) {
+  let suffix = base || `section-${index + 1}`;
+  if (!usedNames.has(suffix)) {
+    usedNames.add(suffix);
+    return suffix;
+  }
+
+  suffix = `${base}-${index + 1}`;
+  usedNames.add(suffix);
+  return suffix;
 }
 
 function resolveMode(extracted) {
@@ -510,7 +768,7 @@ function isDisposableLabel(line) {
 }
 
 function isCaption(line) {
-  return /^(■사진자료|▲Image|Pic\s*\d+|Image\s*\d+)/i.test(line);
+  return /^(\[[^\]]*사진[^\]]*\]|[■▲※◆◇□●○▶▷▪*]+\s*|사진\s*[.:]|Photo\s*[.:]|Image\s*[.:]|Pic\s*\d+)/i.test(line);
 }
 
 function isHeading(line, mode) {
@@ -598,6 +856,10 @@ function indentHtml(html, spaces) {
 
 function downloadText(filename, text) {
   const blob = new Blob([text], { type: "text/html;charset=utf-8" });
+  downloadBlob(filename, blob);
+}
+
+function downloadBlob(filename, blob) {
   const link = document.createElement("a");
   link.href = URL.createObjectURL(blob);
   link.download = filename;
