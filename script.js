@@ -741,7 +741,14 @@ function uniqueSuffix(base, index, usedNames) {
 }
 
 function guessSectionLanguage(section) {
-  const text = [section.title, ...section.summaries, ...section.body.map((block) => block.text)].join(" ");
+  const title = section.title || "";
+  if (/[\uAC00-\uD7A3]/.test(title)) return "ko";
+  if (/[A-Za-z]/.test(title)) return "en";
+
+  const text = [
+    ...section.summaries,
+    ...section.body.filter((block) => block.type !== "image").map((block) => block.text),
+  ].join(" ");
   if (/[\uAC00-\uD7A3]/.test(text)) return "ko";
   if (/[A-Za-z]/.test(text)) return "en";
   return "section";
