@@ -263,6 +263,7 @@ function readEml(text) {
   const plainTexts = plainParts
     .map((part) => decodeMimeBody(part.body, part.encoding))
     .map(normalizeEmailText)
+    .map(isolatePlainTextBox)
     .filter(Boolean);
   const raw = plainTexts.length
     ? plainTexts.join("\n\n")
@@ -409,6 +410,17 @@ function normalizeEmailText(text) {
     .trim();
 }
 
+function isolatePlainTextBox(text) {
+  const normalized = normalizeEmailText(text);
+  const plainMatch = normalized.match(/(?:^|\n)\s*Plain\s*text\s*(?:\n|$)/i);
+  if (!plainMatch) return normalized;
+
+  return normalized
+    .slice((plainMatch.index || 0) + plainMatch[0].length)
+    .replace(/\n\s*(HTML|Rich\s*text|Original\s*message)\s*\n[\s\S]*$/i, "")
+    .trim();
+}
+
 function parseEmlPlainSections(plainTexts) {
   const sections = [];
 
@@ -523,7 +535,7 @@ function isImagePlaceholder(line) {
 
 function isFootnoteBlock(lines) {
   if (!lines.length) return false;
-  return /^(Reference|References|Source|Sources|참고|출처)\s*:/i.test(lines[0])
+  return new RegExp(`^(Reference|References|Source|Sources|${KR_REFERENCE}|${KR_SOURCE})\\s*${LABEL_COLON}`, "i").test(lines[0])
     || lines.every((line) => /^\[\d+\]\s+https?:\/\//i.test(line));
 }
 
@@ -532,10 +544,13 @@ const KR_BODY = "\uBCF8\uBB38";
 const KR_IMAGE = "\uC774\uBBF8\uC9C0";
 const KR_THANKS = "\uAC10\uC0AC\uD569\uB2C8\uB2E4";
 const KR_FROM = "\uC62C\uB9BC";
+const KR_REFERENCE = "\uCC38\uACE0";
+const KR_SOURCE = "\uCD9C\uCC98";
+const LABEL_COLON = "[:\uFF1A]";
 
 function stripEmailHeaderBlock(text) {
   return normalizeEmailText(text)
-    .replace(new RegExp(`^\\s*${KR_TITLE}\\s*[:：][\\s\\S]*?\\n\\s*${KR_BODY}\\s*[:：]\\s*`, "i"), "")
+    .replace(new RegExp(`^[\\s\\S]*?\\n\\s*${KR_BODY}\\s*${LABEL_COLON}\\s*`, "i"), "")
     .split(/\n/)
     .map((line) => stripBodyPrefix(line))
     .filter((line) => !isBodyLabel(line) && !isTitleLabel(line) && !isTitlePrefix(line))
