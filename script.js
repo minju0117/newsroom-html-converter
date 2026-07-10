@@ -468,6 +468,12 @@ function parseEmlBodySection(bodyText) {
       return;
     }
 
+    if (isFootnoteBlock(lines)) {
+      body.push({ type: "footnote", text: lines.join("\n") });
+      summaryOpen = false;
+      return;
+    }
+
     if (summaryOpen && lines.every((line) => /^-\s*/.test(line))) {
       summaries.push(...lines);
       return;
@@ -486,7 +492,7 @@ function parseEmlBodySection(bodyText) {
       }
     });
     if (!lines.some(isImagePlaceholder)) {
-      body.push({ type: "paragraph", text: lines.join("\n") });
+      body.push({ type: isFootnoteBlock(lines) ? "footnote" : "paragraph", text: lines.join("\n") });
     }
   });
 
@@ -513,6 +519,12 @@ function isImagePlaceholder(line) {
     || /^<image>$/i.test(line)
     || new RegExp(`^${KR_IMAGE}$`, "i").test(line)
     || /\.(png|jpe?g|gif|webp)$/i.test(line);
+}
+
+function isFootnoteBlock(lines) {
+  if (!lines.length) return false;
+  return /^(Reference|References|Source|Sources|참고|출처)\s*:/i.test(lines[0])
+    || lines.every((line) => /^\[\d+\]\s+https?:\/\//i.test(line));
 }
 
 const KR_TITLE = "\uC81C\uBAA9";
@@ -668,7 +680,7 @@ function buildEmlSectionHtml(section) {
 
   if (section.summaries.length) {
     section.summaries.forEach((summary) => {
-      html.push(`<p class="bold">\n${applyProductRules(escapeHtml(summary))}\n</p>`);
+      html.push(`<p class="bold">\n${applyInlineFootnotes(applyProductRules(escapeHtml(summary)))}\n</p>`);
     });
     html.push(blank());
   }
@@ -685,6 +697,12 @@ function buildEmlSectionHtml(section) {
       return;
     }
 
+    if (block.type === "footnote") {
+      html.push(footnoteBlock(block.text));
+      if (section.body[index + 1]) html.push(blank());
+      return;
+    }
+
     html.push(`<p>\n${formatParagraphText(block.text)}\n</p>`);
     if (section.body[index + 1]) html.push(blank());
   });
@@ -695,9 +713,29 @@ function buildEmlSectionHtml(section) {
 function formatParagraphText(text) {
   return (text || "")
     .split(/\n/)
-    .map((line) => applyProductRules(escapeHtml(cleanText(line))))
+    .map((line) => applyInlineFootnotes(applyProductRules(escapeHtml(cleanText(line)))))
     .filter(Boolean)
     .join("<br>\n");
+}
+
+function applyInlineFootnotes(html) {
+  return html.replace(/\[(\d+)\]/g, '<span style="font-size: 12px;vertical-align: super;">$1</span>');
+}
+
+function footnoteBlock(text) {
+  const lines = (text || "")
+    .split(/\n/)
+    .map((line) => cleanText(line))
+    .filter(Boolean)
+    .map(formatFootnoteLine);
+
+  return `<p>\n<span style="font-size: 12px; font-style:italic;">\n${lines.join("<br>\n")}\n</span>\n</p>`;
+}
+
+function formatFootnoteLine(line) {
+  return escapeHtml(line)
+    .replace(/\[(\d+)\]/g, "$1")
+    .replace(/(https?:\/\/[^\s<]+)/g, (url) => `<a href="${escapeAttribute(url)}" target="_blank"><u><font color="#0000ff">${escapeHtml(url)}</font></u></a>`);
 }
 
 function buildDownloadFiles(extracted, finalHtml) {
