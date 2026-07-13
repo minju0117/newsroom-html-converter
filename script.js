@@ -1,4 +1,4 @@
-const state = {
+﻿const state = {
   file: null,
   convertedHtml: "",
   previewHtml: "",
@@ -815,7 +815,7 @@ function mergeCaptionAfterImage(items) {
     if (item.type === "paragraph" && index > 0 && items[index - 1].type === "image" && isCaption(item.text)) {
       return { ...item, type: "caption" };
     }
-    if ((item.type === "richParagraph" || item.type === "richCenter") && index > 0 && items[index - 1].type === "image") {
+    if (item.type === "richCenter" && index > 0 && items[index - 1].type === "image") {
       return { ...item, type: "richCaption" };
     }
     return item;
@@ -1303,3 +1303,4 @@ function escapeHtml(value) {
 function escapeAttribute(value) {
   return escapeHtml(value).replace(/`/g, "&#096;");
 }
+
