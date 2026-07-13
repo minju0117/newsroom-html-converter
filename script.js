@@ -593,10 +593,8 @@ function isHtmlFooterStart(paragraph) {
 }
 
 function splitRichHtmlText(html) {
-  return String(html || "")
-    .split(/(?:<br>\s*){2,}/i)
-    .map((chunk) => chunk.trim())
-    .filter(Boolean);
+  const chunk = String(html || "").trim();
+  return chunk ? [chunk] : [];
 }
 
 function hasInlineImage(html) {
@@ -1303,4 +1301,5 @@ function escapeHtml(value) {
 function escapeAttribute(value) {
   return escapeHtml(value).replace(/`/g, "&#096;");
 }
+
 
