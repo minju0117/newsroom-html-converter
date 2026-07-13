@@ -461,9 +461,8 @@ function extractHtmlTableCells(html) {
 
 function parseEmlHtmlSection(html) {
   const paragraphs = [...(html || "").matchAll(/<p\b([^>]*)>([\s\S]*?)<\/p>/gi)]
-    .map((match) => ({ attrs: match[1], html: match[2], text: cleanText(htmlInlineText(match[2])) }))
-    .filter((paragraph) => paragraph.text || hasInlineImage(paragraph.html));
-  if (!paragraphs.length) return null;
+    .map((match) => ({ attrs: match[1], html: match[2], text: cleanText(htmlInlineText(match[2])) }));
+  if (!paragraphs.some((paragraph) => paragraph.text || hasInlineImage(paragraph.html))) return null;
 
   const bodyIndex = paragraphs.findIndex((paragraph) => isBodyLabel(paragraph.text) || isBodyPrefix(paragraph.text));
   const titleIndex = paragraphs.findIndex((paragraph) => isTitlePrefix(paragraph.text));
@@ -480,6 +479,10 @@ function parseEmlHtmlSection(html) {
   for (const paragraph of sourceParagraphs) {
     if (isHtmlFooterStart(paragraph)) break;
     if (isTitleLabel(paragraph.text) || isTitlePrefix(paragraph.text) || isBodyLabel(paragraph.text) || isBodyPrefix(paragraph.text)) continue;
+    if (isBlankHtmlParagraph(paragraph)) {
+      if (body.length && body[body.length - 1].type !== "blank") body.push({ type: "blank" });
+      continue;
+    }
     if (isHtmlImageNote(paragraph.text) || hasInlineImage(paragraph.html)) {
       summaryOpen = false;
       body.push({ type: "image", text: KR_IMAGE });
@@ -958,21 +961,23 @@ function buildEmlSectionHtml(section, imageState = { urls: currentImageUrls(), i
       return;
     }
 
+    if (block.type === "blank") {
+      html.push(blank());
+      return;
+    }
+
     if (block.type === "richCaption") {
       html.push(`<p class="center img_below_txt" style="text-align: center; ">\n${block.html}\n</p>`);
-      if (section.body[index + 1]) html.push(blank());
       return;
     }
 
     if (block.type === "richCenter") {
       html.push(`<p style="text-align: center; ">\n${applyInlineFootnotes(block.html)}\n</p>`);
-      if (section.body[index + 1]) html.push(blank());
       return;
     }
 
     if (block.type === "richParagraph") {
       html.push(`<p>\n${applyInlineFootnotes(block.html)}\n</p>`);
-      if (section.body[index + 1]) html.push(blank());
       return;
     }
 
@@ -1301,6 +1306,7 @@ function escapeHtml(value) {
 function escapeAttribute(value) {
   return escapeHtml(value).replace(/`/g, "&#096;");
 }
+
 
 
 
