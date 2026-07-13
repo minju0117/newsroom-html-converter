@@ -581,6 +581,10 @@ function isHtmlImageNote(text) {
   return /^\(.+\)$/.test(text || "") && /이미지|썸네일/.test(text || "");
 }
 
+function isBlankHtmlParagraph(paragraph) {
+  if ((paragraph.text || "").trim()) return false;
+  return !hasInlineImage(paragraph.html);
+}
 function isCenteredParagraph(paragraph) {
   return /align=["']center["']|text-align:\s*center/i.test(`${paragraph.attrs || ""} ${paragraph.html || ""}`);
 }
@@ -1306,6 +1310,7 @@ function escapeHtml(value) {
 function escapeAttribute(value) {
   return escapeHtml(value).replace(/`/g, "&#096;");
 }
+
 
 
 
