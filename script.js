@@ -508,6 +508,10 @@ function parseEmlHtmlSection(html) {
       continue;
     }
     summaryOpen = false;
+    if (isCentered && body.length && body[body.length - 1].type === "image") {
+      body.push({ type: "richCaption", html: htmlText, text: paragraph.text });
+      continue;
+    }
     if (isHtmlHeading(paragraph.html, paragraph.text)) {
       body.push({ type: hasColor(paragraph.html, "#26247B") ? "richHeading" : "richBold", html: htmlText, text: paragraph.text });
       continue;
