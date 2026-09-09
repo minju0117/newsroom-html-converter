@@ -586,7 +586,8 @@ function isBlankHtmlParagraph(paragraph) {
   return !hasInlineImage(paragraph.html);
 }
 function isCenteredParagraph(paragraph) {
-  return /align=["']center["']|text-align:\s*center/i.test(`${paragraph.attrs || ""} ${paragraph.html || ""}`);
+  const source = `${paragraph.attrs || ""} ${paragraph.html || ""}`;
+  return /\balign\s*=\s*(?:["']\s*center\s*["']|center\b)|\btext-align\s*:\s*center\b/i.test(source);
 }
 
 function isHtmlFooterStart(paragraph) {
