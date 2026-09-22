@@ -227,6 +227,17 @@ h2 {
   font-weight: 700;
 }
 
+.instruction-status {
+  min-height: 18px;
+  color: var(--accent-dark);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.instruction-status.error {
+  color: var(--danger);
+}
+
 .actions {
   display: grid;
   grid-template-columns: 1fr 1fr;

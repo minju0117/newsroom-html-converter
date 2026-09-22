@@ -21,6 +21,7 @@ const videoUrlInput = document.querySelector("#videoUrlInput");
 const sourceInput = document.querySelector("#sourceInput");
 const instructionInput = document.querySelector("#instructionInput");
 const applyInstructionButton = document.querySelector("#applyInstructionButton");
+const instructionStatus = document.querySelector("#instructionStatus");
 const preview = document.querySelector("#preview");
 const htmlOutput = document.querySelector("#htmlOutput");
 const convertStatus = document.querySelector("#convertStatus");
@@ -82,6 +83,21 @@ convertButton.addEventListener("click", async () => {
     const finalHtml = buildAdminHtml(state.extracted);
 
     state.convertedFiles = buildDownloadFiles(state.extracted, finalHtml);
+    const request = instructionInput.value.trim();
+    if (request) {
+      try {
+        const summaries = state.convertedFiles.map((file) => {
+          const result = applyHtmlInstructions(file.html, request);
+          file.html = result.html;
+          return result.summary;
+        });
+        setInstructionStatus(`자동 적용 완료 · ${[...new Set(summaries)].join(", ")}`);
+      } catch (instructionError) {
+        setInstructionStatus(instructionError.message || "추가 요청을 적용하지 못했습니다.", true);
+      }
+    } else {
+      setInstructionStatus("");
+    }
     state.activeFileIndex = 0;
     renderSectionTabs();
     setActiveFile(0);
@@ -91,6 +107,7 @@ convertButton.addEventListener("click", async () => {
   } catch (error) {
     console.error(error);
     setStatus(error.message || "변환에 실패했습니다.", true);
+    setInstructionStatus(error.message || "추가 요청을 적용하지 못했습니다.", true);
     setButtons(false);
   }
 });
@@ -127,8 +144,17 @@ applyInstructionButton.addEventListener("click", () => {
     file.html = result.html;
     setActiveFile(state.activeFileIndex);
     setStatus(`추가 요청 적용 완료 · ${result.summary}`);
+    setInstructionStatus(`적용 완료 · ${result.summary}`);
   } catch (error) {
     setStatus(error.message || "추가 요청을 적용하지 못했습니다.", true);
+    setInstructionStatus(error.message || "추가 요청을 적용하지 못했습니다.", true);
+  }
+});
+
+instructionInput.addEventListener("keydown", (event) => {
+  if ((event.ctrlKey || event.metaKey) && event.key === "Enter" && !applyInstructionButton.disabled) {
+    event.preventDefault();
+    applyInstructionButton.click();
   }
 });
 
@@ -143,6 +169,7 @@ function setFile(file) {
   sectionTabs.hidden = true;
   sectionTabs.innerHTML = "";
   preview.innerHTML = '<p class="empty-state">변환하기를 누르면 결과가 표시됩니다.</p>';
+  setInstructionStatus("");
   fileMeta.textContent = `${file.name} · ${formatBytes(file.size)}`;
   convertButton.disabled = false;
   copyButton.disabled = true;
@@ -716,6 +743,11 @@ function isBlankHtmlParagraph(paragraph) {
 function isCenteredParagraph(paragraph) {
   const source = `${paragraph.attrs || ""} ${paragraph.html || ""}`;
   return /\balign\s*=\s*(?:["']\s*center\s*["']|center\b)|\btext-align\s*:\s*center\b/i.test(source);
+}
+
+function setInstructionStatus(message, isError = false) {
+  instructionStatus.textContent = message;
+  instructionStatus.classList.toggle("error", isError);
 }
 
 function isHtmlFooterStart(paragraph) {
