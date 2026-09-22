@@ -266,13 +266,35 @@ function resolveInstructionTarget(line, root) {
     return { label: "이미지 캡션", nodes };
   }
 
+  if (/소제목|중간\s*(?:제목|타이틀|굵은\s*글씨)|문단\s*(?:제목|타이틀)|본문\s*(?:제목|타이틀)/i.test(line)) {
+    const nodes = findSectionHeadingNodes(root);
+    if (!nodes.length) throw new Error("변환 결과에서 문단 제목을 찾지 못했습니다.");
+    return { label: "문단 제목", nodes };
+  }
+
   if (/제목|타이틀/i.test(line)) {
     const nodes = [...root.querySelectorAll("p.tit_mid")];
     if (!nodes.length) throw new Error("변환 결과에서 제목을 찾지 못했습니다.");
     return { label: "제목", nodes };
   }
 
-  throw new Error("적용 대상을 적어주세요. 현재 ‘제목’과 ‘이미지 캡션’을 지원합니다.");
+  throw new Error("적용 대상을 적어주세요. 현재 ‘제목’, ‘문단 제목’, ‘이미지 캡션’을 지원합니다.");
+}
+
+function findSectionHeadingNodes(root) {
+  const targets = new Set();
+  [...root.querySelectorAll("p")].forEach((paragraph) => {
+    if (paragraph.classList.contains("tit_mid") || paragraph.classList.contains("img_below_txt") || paragraph.classList.contains("bold")) return;
+
+    const paragraphStyle = paragraph.getAttribute("style") || "";
+    if (/font-weight\s*:\s*(?:bold|[6-9]00)/i.test(paragraphStyle)) targets.add(paragraph);
+
+    paragraph.querySelectorAll("span").forEach((span) => {
+      const spanStyle = span.getAttribute("style") || "";
+      if (/font-weight\s*:\s*(?:bold|[6-9]00)/i.test(spanStyle)) targets.add(span);
+    });
+  });
+  return [...targets];
 }
 
 function applyInstructionLine(nodes, line) {
