@@ -19,6 +19,8 @@ const templateMode = document.querySelector("#templateMode");
 const imageUrlsInput = document.querySelector("#imageUrlsInput");
 const videoUrlInput = document.querySelector("#videoUrlInput");
 const sourceInput = document.querySelector("#sourceInput");
+const instructionInput = document.querySelector("#instructionInput");
+const applyInstructionButton = document.querySelector("#applyInstructionButton");
 const preview = document.querySelector("#preview");
 const htmlOutput = document.querySelector("#htmlOutput");
 const convertStatus = document.querySelector("#convertStatus");
@@ -115,6 +117,21 @@ downloadPreviewButton.addEventListener("click", () => {
   downloadText("newsroom-preview.html", state.previewHtml);
 });
 
+applyInstructionButton.addEventListener("click", () => {
+  const request = instructionInput.value.trim();
+  if (!request || !state.convertedFiles.length) return;
+
+  try {
+    const result = applyHtmlInstructions(htmlOutput.value || state.convertedHtml, request);
+    const file = state.convertedFiles[state.activeFileIndex];
+    file.html = result.html;
+    setActiveFile(state.activeFileIndex);
+    setStatus(`추가 요청 적용 완료 · ${result.summary}`);
+  } catch (error) {
+    setStatus(error.message || "추가 요청을 적용하지 못했습니다.", true);
+  }
+});
+
 function setFile(file) {
   state.file = file;
   state.convertedHtml = "";
@@ -131,6 +148,7 @@ function setFile(file) {
   copyButton.disabled = true;
   downloadButton.disabled = true;
   downloadPreviewButton.disabled = true;
+  applyInstructionButton.disabled = true;
   setStatus("파일 준비됨");
 }
 
@@ -139,6 +157,112 @@ function setButtons(hasOutput) {
   copyButton.disabled = !hasOutput;
   downloadButton.disabled = !hasOutput;
   downloadPreviewButton.disabled = !hasOutput;
+  applyInstructionButton.disabled = !hasOutput;
+}
+
+function applyHtmlInstructions(sourceHtml, request) {
+  const template = document.createElement("template");
+  template.innerHTML = sourceHtml;
+  const lines = request.split(/\n+/).map((line) => line.trim()).filter(Boolean);
+  const summaries = [];
+
+  lines.forEach((line) => {
+    const target = resolveInstructionTarget(line, template.content);
+    const changes = applyInstructionLine(target.nodes, line);
+    if (!changes.length) {
+      throw new Error(`요청을 이해하지 못했습니다: “${line}”`);
+    }
+    summaries.push(`${target.label} ${changes.join("·")}`);
+  });
+
+  return { html: template.innerHTML.trim(), summary: summaries.join(", ") };
+}
+
+function resolveInstructionTarget(line, root) {
+  if (/캡션|사진\s*(?:설명|문구)|이미지\s*(?:설명|문구)/i.test(line)) {
+    const nodes = [...root.querySelectorAll("p.img_below_txt")];
+    if (!nodes.length) throw new Error("변환 결과에서 이미지 캡션을 찾지 못했습니다.");
+    return { label: "이미지 캡션", nodes };
+  }
+
+  if (/제목|타이틀/i.test(line)) {
+    const nodes = [...root.querySelectorAll("p.tit_mid")];
+    if (!nodes.length) throw new Error("변환 결과에서 제목을 찾지 못했습니다.");
+    return { label: "제목", nodes };
+  }
+
+  throw new Error("적용 대상을 적어주세요. 현재 ‘제목’과 ‘이미지 캡션’을 지원합니다.");
+}
+
+function applyInstructionLine(nodes, line) {
+  const changes = [];
+  const color = extractRequestedColor(line);
+  const size = line.match(/(?:글자|폰트|텍스트)?\s*(?:크기|사이즈)?\s*(\d+(?:\.\d+)?)\s*(px|pt)\b/i);
+
+  if (color) {
+    nodes.forEach((node) => setInlineStyle(node, "color", color));
+    changes.push(`색상 ${color}`);
+  }
+
+  if (/볼드\s*(?:해제|제거)|굵(?:게|은\s*글씨)\s*(?:해제|제거)|안\s*굵게|보통\s*굵기/i.test(line)) {
+    nodes.forEach((node) => {
+      node.classList.remove("bold");
+      setInlineStyle(node, "font-weight", "normal");
+    });
+    changes.push("볼드 해제");
+  } else if (/볼드|굵게|굵은\s*글씨/i.test(line)) {
+    nodes.forEach((node) => {
+      node.classList.add("bold");
+      setInlineStyle(node, "font-weight", "bold");
+    });
+    changes.push("볼드");
+  }
+
+  const alignment = /왼쪽|좌측/i.test(line)
+    ? { value: "left", label: "왼쪽 정렬" }
+    : /오른쪽|우측/i.test(line)
+      ? { value: "right", label: "오른쪽 정렬" }
+      : /가운데|중앙/i.test(line)
+        ? { value: "center", label: "가운데 정렬" }
+        : null;
+  if (alignment) {
+    nodes.forEach((node) => {
+      node.classList.toggle("center", alignment.value === "center");
+      setInlineStyle(node, "text-align", alignment.value);
+    });
+    changes.push(alignment.label);
+  }
+
+  if (size) {
+    const fontSize = `${size[1]}${size[2].toLowerCase()}`;
+    nodes.forEach((node) => setInlineStyle(node, "font-size", fontSize));
+    changes.push(`크기 ${fontSize}`);
+  }
+
+  return changes;
+}
+
+function setInlineStyle(node, property, value) {
+  const escapedProperty = property.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(`(^|;)\\s*${escapedProperty}\\s*:[^;]*(?=;|$)`, "i");
+  const current = (node.getAttribute("style") || "").replace(pattern, "$1").trim();
+  const prefix = current ? `${current.replace(/;?$/, ";")} ` : "";
+  node.setAttribute("style", `${prefix}${property}: ${value};`);
+}
+
+function extractRequestedColor(line) {
+  const hex = line.match(/#[0-9a-f]{6}\b|#[0-9a-f]{3}\b/i)?.[0];
+  if (hex) return hex.toUpperCase();
+
+  const namedColors = [
+    [/레거시\s*블루|네이비/i, "#26247B"],
+    [/검정|블랙/i, "#000000"],
+    [/흰색|화이트/i, "#FFFFFF"],
+    [/빨강|레드/i, "#FF0000"],
+    [/파랑|블루/i, "#0000FF"],
+    [/초록|그린/i, "#008000"],
+  ];
+  return namedColors.find(([pattern]) => pattern.test(line))?.[1] || "";
 }
 
 function renderSectionTabs() {

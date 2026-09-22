@@ -201,6 +201,32 @@ h2 {
   resize: vertical;
 }
 
+.instruction-box {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid #cfd7e6;
+  border-radius: 7px;
+  background: #f8f9ff;
+}
+
+.instruction-box p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+.instruction-box button {
+  justify-self: start;
+  min-height: 36px;
+  padding: 0 14px;
+  border-color: var(--navy);
+  color: var(--navy);
+  font-weight: 700;
+}
+
 .actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
