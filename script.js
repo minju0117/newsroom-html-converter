@@ -194,6 +194,11 @@ function applyHtmlInstructions(sourceHtml, request) {
   const summaries = [];
 
   lines.forEach((line) => {
+    const structuralSummary = applyStructuralInstruction(template.content, line);
+    if (structuralSummary) {
+      summaries.push(structuralSummary);
+      return;
+    }
     const target = resolveInstructionTarget(line, template.content);
     const changes = applyInstructionLine(target.nodes, line);
     if (!changes.length) {
@@ -203,6 +208,55 @@ function applyHtmlInstructions(sourceHtml, request) {
   });
 
   return { html: template.innerHTML.trim(), summary: summaries.join(", ") };
+}
+
+function applyStructuralInstruction(root, line) {
+  const isImageRequest = /이미지|사진/i.test(line);
+  const isDeleteRequest = /삭제|지워|없애/i.test(line);
+  const mentionsText = /텍스트|문단|문구|글/i.test(line);
+  if (!isImageRequest || !isDeleteRequest || !mentionsText) return "";
+
+  const removeAbove = /위|상단|앞/i.test(line);
+  const removeBelow = /아래|하단|뒤/i.test(line);
+  if (!removeAbove && !removeBelow) return "";
+
+  const imageParagraphs = [...root.querySelectorAll("p")].filter(isImageParagraph);
+  if (!imageParagraphs.length) throw new Error("변환 결과에서 이미지를 찾지 못했습니다.");
+
+  const targets = new Set();
+  imageParagraphs.forEach((imageParagraph) => {
+    if (removeAbove) {
+      const above = closestEditableTextParagraph(imageParagraph, "previousElementSibling");
+      if (above) targets.add(above);
+    }
+    if (removeBelow) {
+      const below = closestEditableTextParagraph(imageParagraph, "nextElementSibling");
+      if (below) targets.add(below);
+    }
+  });
+
+  if (!targets.size) throw new Error("이미지 위·아래에서 삭제할 수 있는 텍스트 문단을 찾지 못했습니다.");
+  targets.forEach((node) => node.remove());
+  const direction = removeAbove && removeBelow ? "위·아래" : removeAbove ? "위" : "아래";
+  return `이미지 ${direction} 텍스트 ${targets.size}개 삭제`;
+}
+
+function isImageParagraph(paragraph) {
+  return Boolean(paragraph.querySelector("img")) || cleanText(paragraph.textContent) === KR_IMAGE;
+}
+
+function closestEditableTextParagraph(start, siblingProperty) {
+  let node = start[siblingProperty];
+  while (node && isBlankOutputParagraph(node)) node = node[siblingProperty];
+  if (!node || node.tagName !== "P" || isImageParagraph(node) || node.classList.contains("tit_mid")) return null;
+  return cleanText(node.textContent) ? node : null;
+}
+
+function isBlankOutputParagraph(node) {
+  if (!node || node.tagName !== "P") return false;
+  const clone = node.cloneNode(true);
+  clone.querySelectorAll("br").forEach((br) => br.remove());
+  return !cleanText(clone.textContent) && !clone.querySelector("img, iframe");
 }
 
 function resolveInstructionTarget(line, root) {
