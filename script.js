@@ -538,7 +538,7 @@ function buildBilingualPptxSections(slides) {
 
   return [
     { title, summaries: [], body: dedupePptxBody(koreanBody.filter((block) => !isEnglishPptCta(block.text))), language: "ko", blankBetweenParagraphs: true },
-    { title, summaries: [], body: dedupePptxBody(englishBody.filter((block) => block.sourceLanguage !== "ko")), language: "en", blankBetweenParagraphs: true },
+    { title, summaries: [], body: mergeEnglishPptCta(dedupePptxBody(englishBody.filter((block) => block.sourceLanguage !== "ko"))), language: "en", blankBetweenParagraphs: true },
   ];
 }
 
@@ -635,6 +635,30 @@ function dedupePptxBody(blocks) {
 function isEnglishPptCta(text) {
   return /^If you also would like to know more about our product Fiberest®? Resistant Dextrin\.?$/i.test(cleanText(text))
     || /^Please feel free to contact us\.?$/i.test(cleanText(text));
+}
+
+function mergeEnglishPptCta(blocks) {
+  const merged = [];
+  for (let index = 0; index < blocks.length; index += 1) {
+    const first = blocks[index];
+    const second = blocks[index + 1];
+    const isFirstCtaLine = /^If you also would like to know more about our product Fiberest®? Resistant Dextrin\.?$/i.test(cleanText(first?.text));
+    const isSecondCtaLine = /^Please feel free to contact us\.?$/i.test(cleanText(second?.text));
+
+    if (isFirstCtaLine && isSecondCtaLine) {
+      merged.push({
+        ...first,
+        type: "richParagraph",
+        text: `${cleanText(first.text)}\n${cleanText(second.text)}`,
+        html: `${first.html}<br>\n${second.html}`,
+      });
+      index += 1;
+      continue;
+    }
+
+    merged.push(first);
+  }
+  return merged;
 }
 
 function applyPptxRequiredLinks(html, text, language) {

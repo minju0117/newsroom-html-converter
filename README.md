@@ -68,7 +68,7 @@ GitHub Pages에서 무료로 띄워 쓰는 뉴스룸 관리자 HTML 변환기입
 - 작은 italic 참고문헌은 하나의 `<span style="font-size: 12px; font-style:italic;">` 안에 줄바꿈으로 묶어 출력
 - PPT의 일반 본문 문단 사이에는 `<p><br></p>` 간격을 출력하되, 문단 제목과 바로 뒤 첫 문단 사이는 띄우지 않음
 - 국문 결과에서는 영문 문의 CTA 문구를 제외
-- 영문 CTA의 `Fiberest® Resistant Dextrin`과 `contact us`에는 지정된 제품·문의 링크를 항상 적용
+- 영문 CTA 두 문장은 하나의 문단 안에서 `<br>`로 줄바꿈하고, `Fiberest® Resistant Dextrin`과 `contact us`에는 지정된 제품·문의 링크를 항상 적용
 - 언어별 결과에서 동일 문단은 한 번만 출력하고, 영문 결과의 국문 원고 블록은 제외
 - `뉴스룸`, `이미지 1`, `영상 1` 같은 작업용 라벨 제거
 - 짧은 섹션 제목은 네이비 bold 스타일 적용
