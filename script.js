@@ -1489,6 +1489,7 @@ function pushPptxParagraphGap(html, section, body, index, block) {
   if (!section.blankBetweenParagraphs) return;
   const next = body[index + 1];
   if (!next || block.type === "blank") return;
+  if (block.type === "richHeading") return;
   if (block.type === "image" && next.type === "richCaption") return;
   html.push(blank());
 }
