@@ -697,8 +697,7 @@ function pptxRunsToHtml(runs, language) {
     if (run.bold) styles.push("font-weight:bold;");
     if (run.italic) styles.push("font-style:italic;");
     if (run.color.toUpperCase() === "#0070C0") styles.push("color:#26247B;");
-    else if (language === "ko" && run.color.toUpperCase() === "#FF0000") styles.push("color:#000000;");
-    else if (run.color) styles.push(`color:${run.color};`);
+    else if (!(language === "ko" && run.color.toUpperCase() === "#FF0000") && run.color) styles.push(`color:${run.color};`);
     const content = escapeHtml(String(run.text).replace(/\s+/g, " "));
     return styles.length ? `<span style="${styles.join(" ")}">${content}</span>` : content;
   }).join("").trim();
