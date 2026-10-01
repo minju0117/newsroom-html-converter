@@ -455,29 +455,203 @@ async function readPptx(file) {
     .sort((a, b) => slideNumber(a.name) - slideNumber(b.name));
   const parser = new DOMParser();
   const blocks = [];
+  const slides = [];
 
   for (const slideFile of slideFiles) {
     const xml = parser.parseFromString(await slideFile.async("text"), "application/xml");
-    const shapes = [...xml.getElementsByTagNameNS(NS.p, "sp")];
+    const shapes = [...xml.getElementsByTagNameNS(NS.p, "sp")].map(parsePptxShape);
     shapes.forEach((shape) => {
-      const paragraphs = [...shape.getElementsByTagNameNS(NS.a, "p")];
-      paragraphs.forEach((paragraph) => {
-        const text = [...paragraph.getElementsByTagNameNS(NS.a, "t")]
-          .map((node) => node.textContent || "")
-          .join("")
-          .trim();
-        const cleaned = cleanText(text);
-        if (cleaned) blocks.push({ type: "paragraph", text: cleaned });
+      shape.paragraphs.forEach((paragraph) => {
+        if (paragraph.text) blocks.push({ type: "paragraph", text: paragraph.text });
       });
     });
+    slides.push({
+      number: slideNumber(slideFile.name),
+      shapes,
+      pictures: [...xml.getElementsByTagNameNS(NS.p, "pic")].map(parsePptxPicture),
+    });
   }
+
+  const sections = buildBilingualPptxSections(slides);
 
   return {
     format: "pptx",
     blocks: removeConsecutiveDuplicates(blocks),
     mediaCount: zip.file(/^ppt\/media\//).length,
     attachments: [],
+    sections,
   };
+}
+
+function parsePptxShape(shape) {
+  const transform = shape.getElementsByTagNameNS(NS.a, "xfrm")[0];
+  const offset = transform?.getElementsByTagNameNS(NS.a, "off")[0];
+  const extent = transform?.getElementsByTagNameNS(NS.a, "ext")[0];
+  return {
+    x: Number(offset?.getAttribute("x") || 0),
+    y: Number(offset?.getAttribute("y") || 0),
+    cx: Number(extent?.getAttribute("cx") || 0),
+    cy: Number(extent?.getAttribute("cy") || 0),
+    paragraphs: [...shape.getElementsByTagNameNS(NS.a, "p")].map(parsePptxParagraph),
+  };
+}
+
+function parsePptxParagraph(paragraph, index) {
+  const runs = [...paragraph.getElementsByTagNameNS(NS.a, "r")].map((run) => {
+    const properties = run.getElementsByTagNameNS(NS.a, "rPr")[0];
+    const colorNode = properties?.getElementsByTagNameNS(NS.a, "srgbClr")[0];
+    return {
+      text: [...run.getElementsByTagNameNS(NS.a, "t")].map((node) => node.textContent || "").join(""),
+      bold: properties?.getAttribute("b") === "1",
+      italic: properties?.getAttribute("i") === "1",
+      size: Number(properties?.getAttribute("sz") || 0),
+      color: colorNode?.getAttribute("val") ? `#${colorNode.getAttribute("val").toUpperCase()}` : "",
+    };
+  }).filter((run) => run.text);
+  return { index, runs, text: cleanText(runs.map((run) => run.text).join("")) };
+}
+
+function parsePptxPicture(picture) {
+  const transform = picture.getElementsByTagNameNS(NS.a, "xfrm")[0];
+  const offset = transform?.getElementsByTagNameNS(NS.a, "off")[0];
+  const extent = transform?.getElementsByTagNameNS(NS.a, "ext")[0];
+  return {
+    x: Number(offset?.getAttribute("x") || 0),
+    y: Number(offset?.getAttribute("y") || 0),
+    cx: Number(extent?.getAttribute("cx") || 0),
+    cy: Number(extent?.getAttribute("cy") || 0),
+  };
+}
+
+function buildBilingualPptxSections(slides) {
+  const preparedSlides = slides.map(prepareBilingualPptxSlide);
+  if (!preparedSlides.some((slide) => slide.englishMain && slide.koreanMain)) return [];
+
+  const title = preparedSlides.map((slide) => slide.title).find(Boolean) || "뉴스룸";
+  const englishBody = [];
+  const koreanBody = [];
+
+  preparedSlides.forEach((slide) => {
+    englishBody.push(...slide.timeline.map((entry) => entry.block));
+    koreanBody.push(...alignKoreanPptxBlocks(slide));
+  });
+
+  return [
+    { title, summaries: [], body: koreanBody, language: "ko" },
+    { title, summaries: [], body: englishBody, language: "en" },
+  ];
+}
+
+function prepareBilingualPptxSlide(slide) {
+  const scoredShapes = slide.shapes.map((shape) => ({
+    shape,
+    koreanScore: shape.paragraphs.reduce((sum, paragraph) => sum + countMatches(paragraph.text, /[가-힣]/g), 0),
+    englishScore: shape.paragraphs.reduce((sum, paragraph) => sum + countMatches(paragraph.text, /[A-Za-z]/g), 0),
+  }));
+  const englishMain = [...scoredShapes].sort((a, b) => b.englishScore - a.englishScore)[0];
+  const koreanMain = [...scoredShapes].filter((item) => item !== englishMain).sort((a, b) => b.koreanScore - a.koreanScore)[0];
+  if (!englishMain || englishMain.englishScore < 120 || !koreanMain || koreanMain.koreanScore < 80) {
+    return { title: "", englishMain: null, koreanMain: null, timeline: [], koreanBlocks: [] };
+  }
+
+  const titleParagraph = englishMain.shape.paragraphs.find((paragraph) => /^제목\s*[:：]/.test(paragraph.text));
+  const title = titleParagraph ? cleanText(titleParagraph.text.replace(/^제목\s*[:：]\s*/, "")) : "";
+  const mainParagraphs = englishMain.shape.paragraphs.filter((paragraph) => {
+    if (!paragraph.text || /^제목\s*[:：]/.test(paragraph.text)) return false;
+    if (title && paragraph.text === title) return false;
+    return !isPptWorkingNote(paragraph.text);
+  });
+  const maxIndex = Math.max(...englishMain.shape.paragraphs.map((paragraph) => paragraph.index), 1);
+  const timeline = mainParagraphs.map((paragraph) => ({
+    y: englishMain.shape.y + (paragraph.index / maxIndex) * Math.max(englishMain.shape.cy, 1),
+    source: "main",
+    block: pptxParagraphToBlock(paragraph, "en"),
+  }));
+
+  slide.pictures.forEach((picture) => timeline.push({ y: picture.y, source: "picture", block: { type: "image", text: KR_IMAGE } }));
+  scoredShapes.forEach(({ shape }) => {
+    if (shape === englishMain.shape || shape === koreanMain.shape || shape.x < 0) return;
+    shape.paragraphs.forEach((paragraph) => {
+      if (isPptWorkingNote(paragraph.text)) return;
+      if (/^Fig\.\s*\d+/i.test(paragraph.text)) {
+        timeline.push({ y: shape.y, source: "caption", block: { type: "richBold", html: pptxRunsToHtml(paragraph.runs, "en"), text: paragraph.text } });
+      } else if (/^\([A-Z]\)/.test(paragraph.text)) {
+        timeline.push({ y: shape.y, source: "caption", block: { type: "richCaption", html: pptxRunsToHtml(paragraph.runs, "en"), text: paragraph.text } });
+      }
+    });
+  });
+  timeline.sort((a, b) => a.y - b.y);
+
+  const koreanBlocks = koreanMain.shape.paragraphs
+    .filter((paragraph) => paragraph.text && !/^\[?본문\]?$/i.test(paragraph.text) && !isPptWorkingNote(paragraph.text))
+    .map((paragraph) => pptxParagraphToBlock(paragraph, "ko"));
+
+  return { title, englishMain, koreanMain, timeline, koreanBlocks };
+}
+
+function alignKoreanPptxBlocks(slide) {
+  if (!slide.koreanBlocks.length) return slide.timeline.map((entry) => entry.block);
+  let koreanIndex = 0;
+  const aligned = slide.timeline.map((entry) => {
+    if (entry.source !== "main" || entry.block.type === "richFootnote") return entry.block;
+    const korean = slide.koreanBlocks[koreanIndex];
+    if (!korean) return entry.block;
+    koreanIndex += 1;
+    const type = entry.block.type === "richHeading" ? "richHeading" : "richParagraph";
+    return { ...korean, type };
+  });
+  if (koreanIndex < slide.koreanBlocks.length) {
+    const footnoteIndex = aligned.findIndex((block) => block.type === "richFootnote");
+    aligned.splice(footnoteIndex >= 0 ? footnoteIndex : aligned.length, 0, ...slide.koreanBlocks.slice(koreanIndex));
+  }
+  return aligned;
+}
+
+function pptxParagraphToBlock(paragraph, language) {
+  const colors = paragraph.runs.map((run) => run.color.toUpperCase()).filter(Boolean);
+  const minSize = Math.min(...paragraph.runs.map((run) => run.size || Infinity));
+  const isFootnote = paragraph.runs.some((run) => run.italic) && minSize <= 800;
+  const isHeading = colors.includes("#0070C0");
+  const normalizedRuns = stripPptxRunPrefix(paragraph.runs, /^부제목\s*[:：]\s*/i);
+  const text = cleanText(normalizedRuns.map((run) => run.text).join(""));
+  const html = pptxRunsToHtml(normalizedRuns, language);
+  if (isFootnote) return { type: "richFootnote", html, text };
+  if (isHeading) return { type: "richHeading", html, text };
+  return { type: "richParagraph", html, text };
+}
+
+function stripPptxRunPrefix(runs, pattern) {
+  const combined = runs.map((run) => run.text).join("");
+  const match = combined.match(pattern);
+  if (!match) return runs;
+  let remaining = match[0].length;
+  return runs.map((run) => {
+    if (remaining <= 0) return run;
+    const removed = Math.min(remaining, run.text.length);
+    remaining -= removed;
+    return { ...run, text: run.text.slice(removed) };
+  }).filter((run) => run.text);
+}
+
+function pptxRunsToHtml(runs, language) {
+  return runs.map((run) => {
+    const styles = [];
+    if (run.bold) styles.push("font-weight:bold;");
+    if (run.italic) styles.push("font-style:italic;");
+    if (run.color.toUpperCase() === "#0070C0") styles.push("color:#26247B;");
+    else if (language === "ko" && run.color.toUpperCase() === "#FF0000") styles.push("color:#000000;");
+    else if (run.color) styles.push(`color:${run.color};`);
+    const content = escapeHtml(String(run.text).replace(/\s+/g, " "));
+    return styles.length ? `<span style="${styles.join(" ")}">${content}</span>` : content;
+  }).join("").trim();
+}
+
+function isPptWorkingNote(text) {
+  return /^(?:도식|신규\s*도식화|이미지\s*위치|논문\s*\d+p|그래프\s*활용)/i.test(cleanText(text));
+}
+
+function countMatches(text, pattern) {
+  return (String(text || "").match(pattern) || []).length;
 }
 
 function slideNumber(path) {
@@ -1073,8 +1247,8 @@ function flattenEmlSection(section) {
 }
 
 function buildAdminHtml(extracted) {
-  if (extracted.format === "eml" && extracted.sections?.length) {
-    return buildEmlAdminHtml([extracted.sections[0]]);
+  if (["eml", "pptx"].includes(extracted.format) && extracted.sections?.length) {
+    return buildEmlAdminHtml([sectionForOutput(extracted.sections[0], extracted.format)]);
   }
 
   const mode = resolveMode(extracted);
@@ -1139,6 +1313,11 @@ function buildAdminHtml(extracted) {
   }
 
   return html.join("\n").replace(/\n{4,}/g, "\n\n").trim();
+}
+
+function sectionForOutput(section, format) {
+  if (format !== "pptx" || !titleInput.value.trim()) return section;
+  return { ...section, title: titleInput.value.trim() };
 }
 
 function buildEmlAdminHtml(sections) {
@@ -1212,6 +1391,11 @@ function buildEmlSectionHtml(section, imageState = { urls: currentImageUrls(), i
       return;
     }
 
+    if (block.type === "richFootnote") {
+      html.push(`<p>\n<span style="font-size: 12px; font-style:italic;">\n${applyInlineFootnotes(block.html)}\n</span>\n</p>`);
+      return;
+    }
+
     if (block.type === "richCenter") {
       html.push(`<p style="text-align: center; ">\n${applyInlineFootnotes(block.html)}\n</p>`);
       return;
@@ -1267,21 +1451,23 @@ function formatFootnoteLine(line) {
 }
 
 function buildDownloadFiles(extracted, finalHtml) {
-  if (extracted.format !== "eml" || !extracted.sections?.length) {
+  if (!["eml", "pptx"].includes(extracted.format) || !extracted.sections?.length) {
     return [{ name: "newsroom-upload.html", label: "HTML", html: finalHtml }];
   }
 
   if (extracted.sections.length === 1) {
-    return [{ name: "newsroom-upload.html", label: sectionLabel(extracted.sections[0], 0), html: buildEmlAdminHtml(extracted.sections) }];
+    const section = sectionForOutput(extracted.sections[0], extracted.format);
+    return [{ name: "newsroom-upload.html", label: sectionLabel(section, 0), html: buildEmlAdminHtml([section]) }];
   }
 
   const usedNames = new Set();
   return extracted.sections.map((section, index) => {
-    const suffix = uniqueSuffix(guessSectionLanguage(section), index, usedNames);
+    const outputSection = sectionForOutput(section, extracted.format);
+    const suffix = uniqueSuffix(guessSectionLanguage(outputSection), index, usedNames);
     return {
       name: `newsroom-upload-${suffix}.html`,
-      label: sectionLabel(section, index),
-      html: buildEmlAdminHtml([section]),
+      label: sectionLabel(outputSection, index),
+      html: buildEmlAdminHtml([outputSection]),
     };
   });
 }
@@ -1299,6 +1485,7 @@ function uniqueSuffix(base, index, usedNames) {
 }
 
 function guessSectionLanguage(section) {
+  if (section.language) return section.language;
   const title = section.title || "";
   if (/[\uAC00-\uD7A3]/.test(title)) return "ko";
   if (/[A-Za-z]/.test(title)) return "en";
