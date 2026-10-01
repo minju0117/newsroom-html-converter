@@ -537,8 +537,8 @@ function buildBilingualPptxSections(slides) {
   });
 
   return [
-    { title, summaries: [], body: dedupePptxBody(koreanBody.filter((block) => !isEnglishPptCta(block.text))), language: "ko" },
-    { title, summaries: [], body: dedupePptxBody(englishBody.filter((block) => block.sourceLanguage !== "ko")), language: "en" },
+    { title, summaries: [], body: dedupePptxBody(koreanBody.filter((block) => !isEnglishPptCta(block.text))), language: "ko", blankBetweenParagraphs: true },
+    { title, summaries: [], body: dedupePptxBody(englishBody.filter((block) => block.sourceLanguage !== "ko")), language: "en", blankBetweenParagraphs: true },
   ];
 }
 
@@ -1369,6 +1369,7 @@ function buildEmlAdminHtml(sections) {
 function buildEmlSectionHtml(section, imageState = { urls: currentImageUrls(), index: 0 }) {
   const html = [];
   const title = cleanText(section.title);
+  const body = collapseRichFootnoteBlocks(section.body);
 
   if (title) {
     html.push(`<p class="tit_mid center bold">\n${escapeHtml(title)}\n</p>`);
@@ -1382,36 +1383,42 @@ function buildEmlSectionHtml(section, imageState = { urls: currentImageUrls(), i
     html.push(blank());
   }
 
-  section.body.forEach((block, index) => {
+  body.forEach((block, index) => {
     if (block.type === "image") {
       html.push(emlImageBlock(imageState));
+      pushPptxParagraphGap(html, section, body, index, block);
       return;
     }
 
     if (block.type === "caption") {
       html.push(captionBlock(block.text));
-      if (section.body[index + 1]) html.push(blank());
+      if (!section.blankBetweenParagraphs && body[index + 1]) html.push(blank());
+      pushPptxParagraphGap(html, section, body, index, block);
       return;
     }
 
     if (block.type === "footnote") {
       html.push(footnoteBlock(block.text));
-      if (section.body[index + 1]) html.push(blank());
+      if (!section.blankBetweenParagraphs && body[index + 1]) html.push(blank());
+      pushPptxParagraphGap(html, section, body, index, block);
       return;
     }
 
     if (block.type === "richHeading") {
       html.push(`<p style="font-weight:bold; color:#26247B;">\n${block.html}\n</p>`);
+      pushPptxParagraphGap(html, section, body, index, block);
       return;
     }
 
     if (block.type === "richBold") {
       html.push(`<p style="font-weight:bold;">\n${block.html}\n</p>`);
+      pushPptxParagraphGap(html, section, body, index, block);
       return;
     }
 
     if (block.type === "richIndent") {
       html.push(`<p class="indent" style="font-align:left;">\n\t${block.html}\n</p>`);
+      pushPptxParagraphGap(html, section, body, index, block);
       return;
     }
 
@@ -1422,29 +1429,68 @@ function buildEmlSectionHtml(section, imageState = { urls: currentImageUrls(), i
 
     if (block.type === "richCaption") {
       html.push(`<p class="center img_below_txt" style="text-align: center; ">\n${block.html}\n</p>`);
+      pushPptxParagraphGap(html, section, body, index, block);
       return;
     }
 
     if (block.type === "richFootnote") {
-      html.push(`<p>\n<span style="font-size: 12px; font-style:italic;">\n${applyInlineFootnotes(block.html)}\n</span>\n</p>`);
+      html.push(`<p>\n<span style="font-size: 12px; font-style:italic;">\n${block.html}\n</span>\n</p>`);
+      pushPptxParagraphGap(html, section, body, index, block);
       return;
     }
 
     if (block.type === "richCenter") {
       html.push(`<p style="text-align: center; ">\n${applyInlineFootnotes(block.html)}\n</p>`);
+      pushPptxParagraphGap(html, section, body, index, block);
       return;
     }
 
     if (block.type === "richParagraph") {
       html.push(`<p>\n${applyInlineFootnotes(block.html)}\n</p>`);
+      pushPptxParagraphGap(html, section, body, index, block);
       return;
     }
 
     html.push(`<p>\n${formatParagraphText(block.text)}\n</p>`);
-    if (section.body[index + 1]) html.push(blank());
+    if (!section.blankBetweenParagraphs && body[index + 1]) html.push(blank());
+    pushPptxParagraphGap(html, section, body, index, block);
   });
 
   return html.join("\n").replace(/\n{4,}/g, "\n\n").trim();
+}
+
+function collapseRichFootnoteBlocks(blocks) {
+  const collapsed = [];
+  (blocks || []).forEach((block) => {
+    if (block.type !== "richFootnote") {
+      collapsed.push(block);
+      return;
+    }
+
+    const previous = collapsed[collapsed.length - 1];
+    if (previous?.type === "richFootnote") {
+      previous.lines.push(block.text);
+      previous.html = previous.lines.map((line) => escapeHtml(cleanText(line))).join("<br>\n");
+      previous.text = previous.lines.join("\n");
+      return;
+    }
+
+    const lines = [block.text];
+    collapsed.push({
+      ...block,
+      lines,
+      html: lines.map((line) => escapeHtml(cleanText(line))).join("<br>\n"),
+    });
+  });
+  return collapsed;
+}
+
+function pushPptxParagraphGap(html, section, body, index, block) {
+  if (!section.blankBetweenParagraphs) return;
+  const next = body[index + 1];
+  if (!next || block.type === "blank") return;
+  if (block.type === "image" && next.type === "richCaption") return;
+  html.push(blank());
 }
 
 function formatParagraphText(text) {
