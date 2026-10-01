@@ -537,8 +537,8 @@ function buildBilingualPptxSections(slides) {
   });
 
   return [
-    { title, summaries: [], body: koreanBody, language: "ko" },
-    { title, summaries: [], body: englishBody, language: "en" },
+    { title, summaries: [], body: dedupePptxBody(koreanBody.filter((block) => !isEnglishPptCta(block.text))), language: "ko" },
+    { title, summaries: [], body: dedupePptxBody(englishBody.filter((block) => block.sourceLanguage !== "ko")), language: "en" },
   ];
 }
 
@@ -614,10 +614,44 @@ function pptxParagraphToBlock(paragraph, language) {
   const isHeading = colors.includes("#0070C0");
   const normalizedRuns = stripPptxRunPrefix(paragraph.runs, /^부제목\s*[:：]\s*/i);
   const text = cleanText(normalizedRuns.map((run) => run.text).join(""));
-  const html = pptxRunsToHtml(normalizedRuns, language);
-  if (isFootnote) return { type: "richFootnote", html, text };
-  if (isHeading) return { type: "richHeading", html, text };
-  return { type: "richParagraph", html, text };
+  const html = applyPptxRequiredLinks(pptxRunsToHtml(normalizedRuns, language), text, language);
+  if (isFootnote) return { type: "richFootnote", html, text, sourceLanguage: language };
+  if (isHeading) return { type: "richHeading", html, text, sourceLanguage: language };
+  return { type: "richParagraph", html, text, sourceLanguage: language };
+}
+
+function dedupePptxBody(blocks) {
+  const seen = new Set();
+  return blocks.filter((block) => {
+    if (block.type === "image") return true;
+    const key = cleanText(block.text || "").toLocaleLowerCase();
+    if (!key) return true;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function isEnglishPptCta(text) {
+  return /^If you also would like to know more about our product Fiberest®? Resistant Dextrin\.?$/i.test(cleanText(text))
+    || /^Please feel free to contact us\.?$/i.test(cleanText(text));
+}
+
+function applyPptxRequiredLinks(html, text, language) {
+  if (language !== "en") return html;
+  if (/^If you also would like to know more about our product/i.test(text)) {
+    return html.replace(
+      /Fiberest®? Resistant Dextrin/i,
+      '<a href="https://samyangspecialty.com/en/product/Ingredients/dietary-fiber" target="_blank"><u><font color="#3984c6">Fiberest® Resistant Dextrin</font></u></a>',
+    );
+  }
+  if (/^Please feel free to contact us/i.test(text)) {
+    return html.replace(
+      /contact us/i,
+      '<a href="https://samyangspecialty.com/en/support/inquiry/product" target="_blank"><u><font color="#3984c6">contact us</font></u></a>',
+    );
+  }
+  return html;
 }
 
 function stripPptxRunPrefix(runs, pattern) {
